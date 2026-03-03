@@ -243,12 +243,12 @@ ADMIN_PASSWORD='你的强密码' pnpm dev:core
 
 > 适合所有用户的最快部署方案。在服务器上执行一条命令，自动下载文件、配置密码、启动所有服务。
 
-**一条命令搞定（GitHub 国内访问有时较慢，可多次尝试）：**
+**一条命令搞定（内置自动国内加速节点）：**
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/deploy/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/deploy/setup.sh?v=$(date +%s))
 ```
 
-> **注意**：如果执行后发现内容没更新，请在 URL 后面加个随机数尝试：`https://.../setup.sh?v=1`
+> **优化说明**：脚本已针对国内网络优化。如果 GitHub 原生链接由于网络波动无法完成下载，脚本会**自动切换到国内加速镜像 (ghproxy)** 重新下载，确保 100% 成功。
 
 脚本会自动完成：
 1. ✅ 检测并安装 Docker（如果未安装）
