@@ -256,13 +256,26 @@ ADMIN_PASSWORD='你的强密码' pnpm dev:core
 由于程序引擎升级至 4.x 后增加了强大的持久化底座支撑，现在无论是全新部署还是升级，**我们推荐直接使用原厂出品的一键脚本获取开箱即用的「四大套件方阵」**。
 无论您使用的是 Intel/AMD，或是甲骨文/树莓派等 ARM 架构的机器，请直接赋予权限并执行：
 
-**🌟 Intel / AMD 等常见 x86_64 服务器请执行：**
+> 💡 **温馨提示**：链接中的 `main` 是分支名，**并非**文件夹名称，这会导致无法单独访问或查看。执行报错或者没反应通常是由于大陆网络屏蔽 `githubusercontent` 的连接！强烈建议直接使用下方专门提供的**国内加速节点**执行部署！
+
+**🌟 方案一：使用国内极速代理节点（强推！适用于大陆服务器）:**
 ```bash
-curl -f -O https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy-x86.sh && chmod +x deploy-x86.sh && ./deploy-x86.sh
+# x86_64 服务器专用（如普通 Intel / AMD 云服务器）：
+curl -f -O https://ghproxy.net/https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy-x86.sh && chmod +x deploy-x86.sh && ./deploy-x86.sh
 ```
 
-**🌟 树莓派 / Mac / 甲骨文 等 ARM64 服务器请执行：**
 ```bash
+# ARM 架构服务器（Mac、树莓派、甲骨文服务器）：
+curl -f -O https://ghproxy.net/https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy-arm.sh && chmod +x deploy-arm.sh && ./deploy-arm.sh
+```
+
+**🌟 方案二：海外服务器标准通道（官方直连）:**
+```bash
+# x86_64 服务器专用：
+curl -f -O https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy-x86.sh && chmod +x deploy-x86.sh && ./deploy-x86.sh
+```
+```bash
+# ARM 架构服务器：
 curl -f -O https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy-arm.sh && chmod +x deploy-arm.sh && ./deploy-arm.sh
 ```
 

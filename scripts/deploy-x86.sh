@@ -8,6 +8,7 @@ set -e
 
 VERSION="4.2.0"
 DOCKER_COMPOSE_URL="https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/docker-compose.prod.yml"
+DOCKER_COMPOSE_URL_PROXY="https://ghproxy.net/https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/docker-compose.prod.yml"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -66,10 +67,14 @@ mkdir -p ./data ./logs ./backup ./mysql-data ./redis-data
 
 print_info "动态拉取远端服务基底谱列..."
 if ! curl -sS -f -O "$DOCKER_COMPOSE_URL"; then
-    print_warning "在线抓取 docker-compose.prod.yml 失败或网络不可达"
-    echo "您可以手动新建一个该配置文件后重试！"
-    exit 1
+    print_warning "官方 Github 节点连接失败，尝试通过 Proxy 镜像节点加速拉取..."
+    if ! curl -sS -f -o docker-compose.prod.yml "$DOCKER_COMPOSE_URL_PROXY"; then
+        print_error "在线抓取 docker-compose.prod.yml 失败或网络完全不可达"
+        echo "您可以手动下载新建一个该配置文件后重试！"
+        exit 1
+    fi
 fi
+print_success "服务基底谱列配置下载成功"
 
 # 4. 生成或补全 .env 环保安全壳
 if [ ! -f .env ]; then
