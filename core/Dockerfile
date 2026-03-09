@@ -16,6 +16,7 @@ RUN npm config set registry https://registry.npmmirror.com && pnpm config set re
 
 # Copy source code
 COPY core ./core
+COPY scripts/service ./scripts/service
 COPY web ./web
 
 # Build web
@@ -54,6 +55,9 @@ COPY --from=prod-deps /app/package.json ../package.json
 
 # Copy core source
 COPY --from=builder /app/core ./
+
+# Copy runtime service scripts required by AI status endpoints
+COPY --from=builder /app/scripts/service ../scripts/service
 
 # Copy built web assets
 COPY --from=builder /app/web/dist ../web/dist
