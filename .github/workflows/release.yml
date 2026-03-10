@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      packages: read
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -51,6 +52,20 @@ jobs:
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: smdk000
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check Announcements
         run: pnpm check:announcements
@@ -80,6 +95,11 @@ jobs:
 
           tar -C release-assets -czf "release-assets/qq-farm-bot-${VERSION}-deploy.tar.gz" qq-farm-deploy
           rm -rf release-assets/qq-farm-deploy
+
+      - name: Package Offline Deployment Bundles
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          bash deploy/scripts/export-offline-packages.sh "${VERSION}" --output-dir release-assets
 
       - name: List Artifacts
         run: ls -R release-assets

@@ -14,6 +14,8 @@ DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/opt}"
 DEPLOY_DIR="${DEPLOY_DIR:-${DEPLOY_BASE_DIR}/${DATE_STAMP}/qq-farm-bot}"
 CURRENT_LINK="${CURRENT_LINK:-${DEPLOY_BASE_DIR}/qq-farm-bot-current}"
 SOURCE_CACHE_DIR="${SOURCE_CACHE_DIR:-${DEPLOY_BASE_DIR}/.qq-farm-build-src/${REPO_REF}}"
+OFFICIAL_DOCKERHUB_APP_IMAGE="${OFFICIAL_DOCKERHUB_APP_IMAGE:-smdk000/qq-farm-bot-ui}"
+OFFICIAL_GHCR_APP_IMAGE="${OFFICIAL_GHCR_APP_IMAGE:-ghcr.io/${REPO_SLUG}}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -47,10 +49,15 @@ mask_secret() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || pwd)"
 USE_LOCAL_BUNDLE=0
+LOCAL_BUNDLE_DIR=""
+LOCAL_SCRIPT_BUNDLE_DIR=""
 DOCKER=(docker)
 SUDO=""
 SKIP_DOCKER_PULL="${SKIP_DOCKER_PULL:-0}"
 NON_INTERACTIVE="${NON_INTERACTIVE:-0}"
+SKIP_IMAGE_ARCH_CHECK="${SKIP_IMAGE_ARCH_CHECK:-0}"
+IMAGE_ARCHIVE_OVERRIDE="${IMAGE_ARCHIVE_OVERRIDE:-${IMAGE_ARCHIVE:-}}"
+APP_IMAGE_SELECTED=""
 
 trap 'print_error "脚本执行失败，请检查上方日志。"' ERR
 
@@ -73,6 +80,10 @@ parse_args() {
                 NON_INTERACTIVE=1
                 shift
                 ;;
+            --image-archive)
+                IMAGE_ARCHIVE_OVERRIDE="${2:-}"
+                shift 2
+                ;;
             *)
                 print_error "未知参数: $1"
                 exit 1
@@ -89,6 +100,14 @@ if [ -f "${REPO_ROOT}/deploy/docker-compose.yml" ] \
     && [ -f "${REPO_ROOT}/deploy/.env.example" ] \
     && [ -f "${REPO_ROOT}/deploy/init-db/01-init.sql" ]; then
     USE_LOCAL_BUNDLE=1
+    LOCAL_BUNDLE_DIR="${REPO_ROOT}/deploy"
+    LOCAL_SCRIPT_BUNDLE_DIR="${REPO_ROOT}/scripts/deploy"
+elif [ -f "${SCRIPT_DIR}/docker-compose.yml" ] \
+    && [ -f "${SCRIPT_DIR}/.env.example" ] \
+    && [ -f "${SCRIPT_DIR}/init-db/01-init.sql" ]; then
+    USE_LOCAL_BUNDLE=1
+    LOCAL_BUNDLE_DIR="${SCRIPT_DIR}"
+    LOCAL_SCRIPT_BUNDLE_DIR="${SCRIPT_DIR}"
 fi
 
 if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
@@ -198,15 +217,15 @@ copy_or_download_bundle() {
     fi
 
     if [ "${USE_LOCAL_BUNDLE}" -eq 1 ]; then
-        cp "${REPO_ROOT}/deploy/docker-compose.yml" "${target_dir}/docker-compose.yml"
-        cp "${REPO_ROOT}/deploy/.env.example" "${target_dir}/.env.example"
-        cp "${REPO_ROOT}/deploy/init-db/01-init.sql" "${target_dir}/init-db/01-init.sql"
-        cp "${REPO_ROOT}/deploy/README.md" "${target_dir}/README.md"
-        cp "${REPO_ROOT}/scripts/deploy/update-app.sh" "${target_dir}/update-app.sh"
-        cp "${REPO_ROOT}/scripts/deploy/repair-mysql.sh" "${target_dir}/repair-mysql.sh"
-        cp "${REPO_ROOT}/scripts/deploy/repair-deploy.sh" "${target_dir}/repair-deploy.sh"
-        cp "${REPO_ROOT}/scripts/deploy/fresh-install.sh" "${target_dir}/fresh-install.sh"
-        cp "${REPO_ROOT}/scripts/deploy/quick-deploy.sh" "${target_dir}/quick-deploy.sh"
+        cp "${LOCAL_BUNDLE_DIR}/docker-compose.yml" "${target_dir}/docker-compose.yml"
+        cp "${LOCAL_BUNDLE_DIR}/.env.example" "${target_dir}/.env.example"
+        cp "${LOCAL_BUNDLE_DIR}/init-db/01-init.sql" "${target_dir}/init-db/01-init.sql"
+        cp "${LOCAL_BUNDLE_DIR}/README.md" "${target_dir}/README.md"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/update-app.sh" "${target_dir}/update-app.sh"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/repair-mysql.sh" "${target_dir}/repair-mysql.sh"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/repair-deploy.sh" "${target_dir}/repair-deploy.sh"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/fresh-install.sh" "${target_dir}/fresh-install.sh"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/quick-deploy.sh" "${target_dir}/quick-deploy.sh"
     else
         download_file "deploy/docker-compose.yml" "${target_dir}/docker-compose.yml"
         download_file "deploy/.env.example" "${target_dir}/.env.example"
@@ -268,6 +287,184 @@ sync_env_from_shell() {
     done
 }
 
+is_truthy() {
+    case "${1:-0}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+normalize_arch() {
+    case "${1:-}" in
+        x86_64|amd64)
+            printf 'amd64\n'
+            ;;
+        aarch64|arm64)
+            printf 'arm64\n'
+            ;;
+        *)
+            printf '%s\n' "${1:-unknown}"
+            ;;
+    esac
+}
+
+get_host_arch() {
+    normalize_arch "$(uname -m)"
+}
+
+image_exists() {
+    local image="$1"
+    "${DOCKER[@]}" image inspect "${image}" >/dev/null 2>&1
+}
+
+get_local_image_arch() {
+    local image="$1"
+    "${DOCKER[@]}" image inspect --format '{{.Architecture}}' "${image}" 2>/dev/null | head -n 1
+}
+
+load_image_archive() {
+    local archive="$1"
+
+    [ -n "${archive}" ] || return 0
+
+    if [ ! -f "${archive}" ]; then
+        print_error "离线镜像包不存在: ${archive}"
+        return 1
+    fi
+
+    print_info "加载离线镜像包: ${archive}"
+    case "${archive}" in
+        *.tar)
+            "${DOCKER[@]}" load -i "${archive}"
+            ;;
+        *.tar.gz|*.tgz)
+            if ! command -v gzip >/dev/null 2>&1; then
+                print_error "缺少 gzip，无法导入压缩镜像包: ${archive}"
+                return 1
+            fi
+            gzip -dc "${archive}" | "${DOCKER[@]}" load
+            ;;
+        *)
+            print_error "仅支持 .tar / .tar.gz / .tgz 格式的离线镜像包: ${archive}"
+            return 1
+            ;;
+    esac
+
+    SKIP_DOCKER_PULL=1
+    print_success "离线镜像包已导入，自动切换为本地镜像模式。"
+}
+
+extract_image_tag() {
+    local image="$1"
+    local last_segment=""
+
+    if [[ "${image}" == *@* ]]; then
+        return 1
+    fi
+
+    last_segment="${image##*/}"
+    if [[ "${last_segment}" == *:* ]]; then
+        printf '%s\n' "${last_segment##*:}"
+    else
+        printf 'latest\n'
+    fi
+}
+
+APP_IMAGE_CANDIDATES=()
+
+append_unique_app_image_candidate() {
+    local candidate="$1"
+    local existing=""
+
+    [ -n "${candidate}" ] || return 0
+
+    for existing in "${APP_IMAGE_CANDIDATES[@]}"; do
+        if [ "${existing}" = "${candidate}" ]; then
+            return 0
+        fi
+    done
+
+    APP_IMAGE_CANDIDATES+=("${candidate}")
+}
+
+build_app_image_candidates() {
+    local requested_image="$1"
+    local tag=""
+
+    APP_IMAGE_CANDIDATES=()
+    append_unique_app_image_candidate "${requested_image}"
+
+    if tag="$(extract_image_tag "${requested_image}")"; then
+        append_unique_app_image_candidate "${OFFICIAL_DOCKERHUB_APP_IMAGE}:${tag}"
+        append_unique_app_image_candidate "${OFFICIAL_GHCR_APP_IMAGE}:${tag}"
+    fi
+}
+
+select_local_app_image_candidate() {
+    local candidate=""
+
+    for candidate in "${APP_IMAGE_CANDIDATES[@]}"; do
+        if image_exists "${candidate}"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+use_selected_app_image() {
+    local requested_image="$1"
+    local selected_image="$2"
+
+    APP_IMAGE="${selected_image}"
+    APP_IMAGE_SELECTED="${selected_image}"
+    set_env_value "APP_IMAGE" "${selected_image}" "${DEPLOY_DIR}/.env"
+
+    if [ "${selected_image}" != "${requested_image}" ]; then
+        print_warning "主程序镜像已回退到可用来源: ${selected_image}"
+    else
+        print_info "主程序镜像: ${selected_image}"
+    fi
+}
+
+ensure_app_image_architecture_matches() {
+    local image="$1"
+    local host_arch=""
+    local image_arch=""
+
+    if ! image_exists "${image}"; then
+        print_error "主程序镜像未在本地找到，无法执行架构检查: ${image}"
+        return 1
+    fi
+
+    host_arch="$(get_host_arch)"
+    image_arch="$(normalize_arch "$(get_local_image_arch "${image}")")"
+
+    if [ -z "${image_arch}" ] || [ "${image_arch}" = "unknown" ]; then
+        print_warning "无法识别主程序镜像架构，跳过预检: ${image}"
+        return 0
+    fi
+
+    if [ "${host_arch}" != "${image_arch}" ]; then
+        if is_truthy "${SKIP_IMAGE_ARCH_CHECK}"; then
+            print_warning "已跳过主程序镜像架构检查: ${image_arch} on ${host_arch}"
+            return 0
+        fi
+
+        print_error "主程序镜像架构与服务器不匹配: image=${image_arch}, host=${host_arch}"
+        print_error "请导入对应架构的离线包，或改用正确的镜像标签后重试。"
+        print_error "如确需跳过，请显式设置 SKIP_IMAGE_ARCH_CHECK=1。"
+        return 1
+    fi
+
+    print_success "主程序镜像架构检查通过: ${image_arch}"
+}
+
 run_announcement_check_if_available() {
     local checker="${REPO_ROOT}/scripts/utils/check-announcements.js"
 
@@ -296,9 +493,8 @@ load_deploy_env() {
     fi
 }
 
-get_required_images() {
+get_support_images() {
     printf '%s\n' \
-        "${APP_IMAGE:-smdk000/qq-farm-bot-ui:4.5.18}" \
         "${MYSQL_IMAGE:-mysql:8.0}" \
         "${REDIS_IMAGE:-redis:7-alpine}" \
         "${IPAD860_IMAGE:-smdk000/ipad860:latest}"
@@ -388,6 +584,11 @@ ensure_official_image() {
         return 0
     fi
 
+    if image_exists "${image}"; then
+        print_warning "官方镜像拉取失败，改用本地缓存: ${image}"
+        return 0
+    fi
+
     print_error "官方镜像拉取失败: ${image}"
     print_error "请确认服务器可正常访问 Docker Hub，或手动提前导入该镜像。"
     return 1
@@ -408,21 +609,85 @@ pull_image_or_build() {
     return 1
 }
 
-pull_required_images() {
-    if [ "${SKIP_DOCKER_PULL}" = "1" ] || [ "${SKIP_DOCKER_PULL}" = "true" ]; then
-        print_info "检测到 SKIP_DOCKER_PULL=${SKIP_DOCKER_PULL}，跳过镜像拉取，直接使用本地镜像。"
+resolve_app_image() {
+    local requested_image="$1"
+    local candidate=""
+
+    build_app_image_candidates "${requested_image}"
+
+    if is_truthy "${SKIP_DOCKER_PULL}"; then
+        candidate="$(select_local_app_image_candidate || true)"
+        if [ -z "${candidate}" ]; then
+            print_error "已启用本地镜像模式，但没有找到可用主程序镜像缓存。"
+            print_error "已尝试的本地标签: ${APP_IMAGE_CANDIDATES[*]}"
+            return 1
+        fi
+
+        print_info "使用本地主程序镜像缓存: ${candidate}"
+        use_selected_app_image "${requested_image}" "${candidate}"
         return 0
     fi
 
-    local image
+    for candidate in "${APP_IMAGE_CANDIDATES[@]}"; do
+        print_info "尝试拉取主程序镜像: ${candidate}"
+        if pull_one_image "${candidate}"; then
+            use_selected_app_image "${requested_image}" "${candidate}"
+            return 0
+        fi
+    done
+
+    candidate="$(select_local_app_image_candidate || true)"
+    if [ -n "${candidate}" ]; then
+        print_warning "镜像仓库均不可用，回退到本地主程序镜像缓存: ${candidate}"
+        use_selected_app_image "${requested_image}" "${candidate}"
+        return 0
+    fi
+
+    if build_image_from_source "${requested_image}"; then
+        use_selected_app_image "${requested_image}" "${requested_image}"
+        return 0
+    fi
+
+    print_error "主程序镜像处理失败，已尝试 APP_IMAGE / Docker Hub / GHCR / 本地缓存 / 源码构建。"
+    return 1
+}
+
+ensure_support_image_available() {
+    local image="$1"
+
+    if is_truthy "${SKIP_DOCKER_PULL}"; then
+        if image_exists "${image}"; then
+            print_info "使用本地镜像缓存: ${image}"
+            return 0
+        fi
+
+        print_error "已启用本地镜像模式，但缺少镜像: ${image}"
+        print_error "请先执行 docker load 导入完整离线包，或取消 SKIP_DOCKER_PULL 后重试。"
+        return 1
+    fi
+
+    pull_image_or_build "${image}"
+}
+
+pull_required_images() {
+    if is_truthy "${SKIP_DOCKER_PULL}"; then
+        print_info "检测到 SKIP_DOCKER_PULL=${SKIP_DOCKER_PULL}，跳过镜像拉取，直接使用本地镜像。"
+    fi
+
+    local requested_app_image="${APP_IMAGE:-${OFFICIAL_DOCKERHUB_APP_IMAGE}:4.5.18}"
+    local image=""
+
+    resolve_app_image "${requested_app_image}" || return 1
+    ensure_app_image_architecture_matches "${APP_IMAGE}" || return 1
+
     while IFS= read -r image; do
         [ -n "${image}" ] || continue
-        pull_image_or_build "${image}" || {
+        ensure_support_image_available "${image}" || {
             print_error "镜像拉取最终失败: ${image}"
             print_error "请检查 GitHub / Docker Hub 官方网络连通性，或在 .env 中覆盖镜像地址。"
             return 1
         }
-    done < <(get_required_images)
+    done < <(get_support_images)
 }
 
 wait_for_container() {
@@ -555,6 +820,10 @@ main() {
     set_env_value "WEB_PORT" "${web_port}" "${DEPLOY_DIR}/.env"
     sync_env_from_shell "${DEPLOY_DIR}/.env"
     load_deploy_env "${DEPLOY_DIR}/.env"
+    if [ -z "${IMAGE_ARCHIVE_OVERRIDE}" ] && [ -n "${IMAGE_ARCHIVE:-}" ]; then
+        IMAGE_ARCHIVE_OVERRIDE="${IMAGE_ARCHIVE}"
+    fi
+    load_image_archive "${IMAGE_ARCHIVE_OVERRIDE}"
 
     cd "${DEPLOY_DIR}"
 

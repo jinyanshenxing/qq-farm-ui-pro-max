@@ -116,92 +116,11 @@ build_ipad860() {
 export_offline() {
     print_info "========== 导出离线安装包 =========="
 
-    cd "${PROJECT_ROOT}"
-    EXPORT_DIR="${PROJECT_ROOT}/deploy/offline"
-    mkdir -p "${EXPORT_DIR}"
-
-    print_info "拉取所有镜像到本地..."
-    docker pull "${BOT_IMAGE}:latest" --platform linux/amd64
-    docker pull "${IPAD860_IMAGE}:latest" --platform linux/amd64
-    docker pull mysql:8.0 --platform linux/amd64
-    docker pull redis:7-alpine --platform linux/amd64
-
-    print_info "导出镜像为 tar.gz（约 500MB~1GB）..."
-    docker save \
-        "${BOT_IMAGE}:latest" \
-        "${IPAD860_IMAGE}:latest" \
-        mysql:8.0 \
-        redis:7-alpine \
-        | gzip > "${EXPORT_DIR}/qq-farm-bot-images.tar.gz"
-
-    print_success "镜像已导出: ${EXPORT_DIR}/qq-farm-bot-images.tar.gz"
-
-    # 打包部署文件
-    print_info "打包部署文件..."
-    TMP_DEPLOY_DIR="$(mktemp -d /tmp/qq-farm-bot-deploy.XXXXXX)"
-    cp "${PROJECT_ROOT}/deploy/docker-compose.yml" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/deploy/.env.example" "${TMP_DEPLOY_DIR}/.env.example"
-    cp "${PROJECT_ROOT}/deploy/README.md" "${TMP_DEPLOY_DIR}/"
-    cp -r "${PROJECT_ROOT}/deploy/init-db" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/scripts/deploy/fresh-install.sh" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/scripts/deploy/repair-mysql.sh" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/scripts/deploy/repair-deploy.sh" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/scripts/deploy/update-app.sh" "${TMP_DEPLOY_DIR}/"
-    cp "${PROJECT_ROOT}/scripts/deploy/quick-deploy.sh" "${TMP_DEPLOY_DIR}/"
-    tar czf "${EXPORT_DIR}/qq-farm-bot-deploy.tar.gz" -C "${TMP_DEPLOY_DIR}" .
-    rm -rf "${TMP_DEPLOY_DIR}"
-
-    print_success "部署文件已打包: ${EXPORT_DIR}/qq-farm-bot-deploy.tar.gz"
-
-    # 生成 all-in-one 包（镜像 + 部署文件）
-    print_info "生成一体化安装包..."
-    mkdir -p /tmp/qq-farm-bot-release
-    cp "${EXPORT_DIR}/qq-farm-bot-images.tar.gz" /tmp/qq-farm-bot-release/
-    cp deploy/docker-compose.yml /tmp/qq-farm-bot-release/
-    cp deploy/.env.example /tmp/qq-farm-bot-release/
-    cp -r deploy/init-db deploy/README.md /tmp/qq-farm-bot-release/
-    cp scripts/deploy/fresh-install.sh scripts/deploy/repair-mysql.sh scripts/deploy/repair-deploy.sh scripts/deploy/update-app.sh scripts/deploy/quick-deploy.sh /tmp/qq-farm-bot-release/
-
-    # 生成安装脚本
-    cat > /tmp/qq-farm-bot-release/install.sh << 'INSTALL_EOF'
-#!/bin/bash
-echo "=========================================="
-echo "  QQ 农场智能助手 - 离线安装"
-echo "=========================================="
-echo ""
-
-# 加载镜像
-echo "📦 加载 Docker 镜像..."
-docker load < qq-farm-bot-images.tar.gz
-echo ""
-
-# 生成运行配置
-if [ ! -f .env ] && [ -f .env.example ]; then
-  cp .env.example .env
-fi
-
-# 启动服务
-echo "🚀 启动所有服务..."
-docker compose up -d
-
-echo ""
-echo "✅ 安装完成！"
-echo "📌 访问地址: http://$(hostname -I | awk '{print $1}'):3080"
-echo "📌 默认密码: 见 .env 文件中的 ADMIN_PASSWORD"
-echo "📌 后续仅更新主程序: ./update-app.sh"
-echo "📌 如果部署包丢失/损坏: ./repair-deploy.sh --backup"
-echo ""
-INSTALL_EOF
-    chmod +x /tmp/qq-farm-bot-release/install.sh
-    chmod +x /tmp/qq-farm-bot-release/fresh-install.sh /tmp/qq-farm-bot-release/repair-mysql.sh /tmp/qq-farm-bot-release/repair-deploy.sh /tmp/qq-farm-bot-release/update-app.sh /tmp/qq-farm-bot-release/quick-deploy.sh
-
-    cd /tmp
-    tar czf "${PROJECT_ROOT}/deploy/offline/qq-farm-bot-v${VERSION}-offline.tar.gz" \
-        qq-farm-bot-release/
-
-    rm -rf /tmp/qq-farm-bot-release
-
-    print_success "一体化离线包: ${PROJECT_ROOT}/deploy/offline/qq-farm-bot-v${VERSION}-offline.tar.gz"
+    bash "${PROJECT_ROOT}/deploy/scripts/export-offline-packages.sh" \
+        "${VERSION}" \
+        --output-dir "${PROJECT_ROOT}/deploy/offline" \
+        --app-image "${BOT_IMAGE}:${VERSION}" \
+        --ipad860-image "${IPAD860_IMAGE}:latest"
 }
 
 # ========== 显示结果摘要 ==========
@@ -218,14 +137,18 @@ show_summary() {
     echo "  ${IPAD860_IMAGE}:latest"
     echo ""
     print_info "离线包:"
-    echo "  deploy/offline/qq-farm-bot-v${VERSION}-offline.tar.gz"
+    echo "  deploy/offline/qq-farm-bot-deploy.tar.gz"
+    echo "  deploy/offline/qq-farm-bot-images-amd64.tar.gz"
+    echo "  deploy/offline/qq-farm-bot-images-arm64.tar.gz"
+    echo "  deploy/offline/qq-farm-bot-v${VERSION}-offline-amd64.tar.gz"
+    echo "  deploy/offline/qq-farm-bot-v${VERSION}-offline-arm64.tar.gz"
     echo ""
     print_info "用户部署命令（在线）:"
     echo "  docker compose up -d"
     echo ""
     print_info "用户部署命令（离线）:"
-    echo "  tar xzf qq-farm-bot-v${VERSION}-offline.tar.gz"
-    echo "  cd qq-farm-bot-release"
+    echo "  tar xzf qq-farm-bot-v${VERSION}-offline-amd64.tar.gz"
+    echo "  cd qq-farm-bot-release-amd64"
     echo "  ./install.sh"
     echo ""
     print_info "Docker Hub 查看:"

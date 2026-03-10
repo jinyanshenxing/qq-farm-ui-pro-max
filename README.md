@@ -287,12 +287,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/m
 - 下载 `docker-compose.yml`、`.env.example`、初始化 SQL、部署说明、一键部署/更新/修复脚本
 - 启动 `qq-farm-bot`、`mysql`、`redis`、`ipad860`
 - 等待容器健康检查通过
+- 主程序镜像按 `APP_IMAGE -> Docker Hub -> GHCR -> 本地缓存 -> 源码构建` 顺序回退
+- 支持 `--image-archive /path/to/qq-farm-bot-images-<arch>.tar.gz` 或 `.env` 里的 `IMAGE_ARCHIVE=/path/to/...`
+- 启动前会检查主程序镜像架构是否和宿主机一致，避免把 `arm64` 镜像误装到 `amd64` 服务器
 - 启动完成后自动执行一次 `repair-mysql.sh`
 
 常用无交互写法：
 
 ```bash
 WEB_PORT=3080 ADMIN_PASSWORD='你的强密码' NON_INTERACTIVE=1 \
+bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/fresh-install.sh)
+```
+
+弱网或离线首装示例：
+
+```bash
+IMAGE_ARCHIVE=/root/qq-farm-bot-images-amd64.tar.gz \
 bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/fresh-install.sh)
 ```
 
@@ -347,6 +357,9 @@ bash update-app.sh
 # 如需切到指定版本
 bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.18
 
+# 弱网 / 离线环境：先 docker load，再用离线镜像包更新
+bash update-app.sh --image-archive /root/qq-farm-bot-images-amd64.tar.gz
+
 # 只想单独修复旧 MySQL 结构
 bash repair-mysql.sh --backup
 ```
@@ -359,6 +372,7 @@ bash repair-mysql.sh --backup
 - `update-app.sh` 会先执行 `repair-mysql.sh`，再更新主程序镜像。
 - `update-app.sh` 会同步部署目录里的 `docker-compose.yml`、`.env.example`、README 和修复脚本。
 - `update-app.sh` 会重新维护 `/opt/qq-farm-bot-current` 链接，避免旧服 current 链接丢失。
+- `update-app.sh` 同样会按 `APP_IMAGE -> Docker Hub -> GHCR -> 本地缓存 -> 源码构建` 回退，并在启动前做主程序镜像架构预检。
 
 ## 🩹 场景 3：旧服务器先修部署包，再升级
 
@@ -388,6 +402,17 @@ docker compose logs -f qq-farm-bot
 # 测试接口
 curl http://localhost:3080/api/ping
 ```
+
+### Release 离线包
+
+从本版本开始，Release 与本地导出都会同时产出：
+
+- `qq-farm-bot-images-amd64.tar.gz`
+- `qq-farm-bot-images-arm64.tar.gz`
+- `qq-farm-bot-v4.5.18-offline-amd64.tar.gz`
+- `qq-farm-bot-v4.5.18-offline-arm64.tar.gz`
+
+其中 `arm64` 离线包里的 `ipad860` 仍是 `linux/amd64`，目标宿主机需支持 QEMU。
 
 访问地址：`http://服务器IP:3080`
 
