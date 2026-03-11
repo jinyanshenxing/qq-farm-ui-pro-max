@@ -11,11 +11,13 @@ REPO_SLUG="${REPO_SLUG:-smdk000/qq-farm-ui-pro-max}"
 REPO_REF="${REPO_REF:-main}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_REF}}"
 MYSQL_SERVICE="${MYSQL_SERVICE:-mysql}"
-MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME:-${STACK_NAME}-mysql}"
+MYSQL_CONTAINER_NAME_INPUT="${MYSQL_CONTAINER_NAME:-}"
+MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME_INPUT:-${STACK_NAME}-mysql}"
 BACKUP_BEFORE_REPAIR="${BACKUP_BEFORE_REPAIR:-0}"
 DOCKER=(docker)
 SUDO=""
 CURRENT_LINK_EXPLICIT=0
+MYSQL_CONTAINER_NAME_EXPLICIT=0
 STACK_DIR_NAME=""
 
 RED='\033[0;31m'
@@ -49,11 +51,16 @@ fi
 if [ -n "${CURRENT_LINK_INPUT}" ]; then
     CURRENT_LINK_EXPLICIT=1
 fi
+if [ -n "${MYSQL_CONTAINER_NAME_INPUT}" ]; then
+    MYSQL_CONTAINER_NAME_EXPLICIT=1
+fi
 
 refresh_stack_layout() {
     STACK_NAME="$(normalize_stack_name "${STACK_NAME:-qq-farm}")"
     STACK_DIR_NAME="$(stack_dir_name "${STACK_NAME}")"
-    MYSQL_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "mysql")"
+    if [ "${MYSQL_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        MYSQL_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "mysql")"
+    fi
     if [ "${CURRENT_LINK_EXPLICIT}" != "1" ]; then
         CURRENT_LINK="$(stack_current_link_path "${DEPLOY_BASE_DIR}" "${STACK_NAME}")"
     fi
@@ -147,6 +154,9 @@ load_deploy_env() {
         # shellcheck disable=SC1090
         . "${file}"
         set +a
+        if [ -n "${MYSQL_CONTAINER_NAME:-}" ]; then
+            MYSQL_CONTAINER_NAME_EXPLICIT=1
+        fi
         refresh_stack_layout
     fi
 }

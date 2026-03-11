@@ -5,7 +5,8 @@ set -Eeuo pipefail
 APP_SERVICE="${APP_SERVICE:-qq-farm-bot}"
 COMPOSE_APP_SERVICE="${COMPOSE_APP_SERVICE:-${APP_SERVICE}}"
 STACK_NAME="${STACK_NAME:-qq-farm}"
-APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-${STACK_NAME}-bot}"
+APP_CONTAINER_NAME_INPUT="${APP_CONTAINER_NAME:-}"
+APP_CONTAINER_NAME="${APP_CONTAINER_NAME_INPUT:-${STACK_NAME}-bot}"
 DEPLOY_DIR="${DEPLOY_DIR:-$(pwd)}"
 DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/opt}"
 CURRENT_LINK_INPUT="${CURRENT_LINK:-}"
@@ -53,10 +54,14 @@ ADMIN_PASSWORD_EXPLICIT=0
 ADMIN_PASSWORD_OVERRIDE=""
 APP_IMAGE_SELECTED=""
 CURRENT_LINK_EXPLICIT=0
+APP_CONTAINER_NAME_EXPLICIT=0
 STACK_DIR_NAME=""
 
 if [ -n "${CURRENT_LINK_INPUT}" ]; then
     CURRENT_LINK_EXPLICIT=1
+fi
+if [ -n "${APP_CONTAINER_NAME_INPUT}" ]; then
+    APP_CONTAINER_NAME_EXPLICIT=1
 fi
 
 if [ "${ADMIN_PASSWORD+x}" = "x" ] && [ -n "${ADMIN_PASSWORD}" ]; then
@@ -72,7 +77,9 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 refresh_stack_layout() {
     STACK_NAME="$(normalize_stack_name "${STACK_NAME:-qq-farm}")"
     STACK_DIR_NAME="$(stack_dir_name "${STACK_NAME}")"
-    APP_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "bot")"
+    if [ "${APP_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        APP_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "bot")"
+    fi
     if [ "${CURRENT_LINK_EXPLICIT}" != "1" ]; then
         CURRENT_LINK="$(stack_current_link_path "${DEPLOY_BASE_DIR}" "${STACK_NAME}")"
     fi
@@ -190,6 +197,9 @@ load_deploy_env() {
         # shellcheck disable=SC1090
         . "${file}"
         set +a
+        if [ -n "${APP_CONTAINER_NAME:-}" ]; then
+            APP_CONTAINER_NAME_EXPLICIT=1
+        fi
         refresh_stack_layout
     fi
 }

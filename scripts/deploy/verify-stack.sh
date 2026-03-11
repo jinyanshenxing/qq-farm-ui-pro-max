@@ -11,17 +11,25 @@ REPO_SLUG="${REPO_SLUG:-smdk000/qq-farm-ui-pro-max}"
 REPO_REF="${REPO_REF:-main}"
 RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_REF}}"
 APP_SERVICE="${APP_SERVICE:-qq-farm-bot}"
-APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-${STACK_NAME}-bot}"
+APP_CONTAINER_NAME_INPUT="${APP_CONTAINER_NAME:-}"
+APP_CONTAINER_NAME="${APP_CONTAINER_NAME_INPUT:-${STACK_NAME}-bot}"
 MYSQL_SERVICE="${MYSQL_SERVICE:-mysql}"
-MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME:-${STACK_NAME}-mysql}"
+MYSQL_CONTAINER_NAME_INPUT="${MYSQL_CONTAINER_NAME:-}"
+MYSQL_CONTAINER_NAME="${MYSQL_CONTAINER_NAME_INPUT:-${STACK_NAME}-mysql}"
 REDIS_SERVICE="${REDIS_SERVICE:-redis}"
-REDIS_CONTAINER_NAME="${REDIS_CONTAINER_NAME:-${STACK_NAME}-redis}"
+REDIS_CONTAINER_NAME_INPUT="${REDIS_CONTAINER_NAME:-}"
+REDIS_CONTAINER_NAME="${REDIS_CONTAINER_NAME_INPUT:-${STACK_NAME}-redis}"
 IPAD860_SERVICE="${IPAD860_SERVICE:-ipad860}"
-IPAD860_CONTAINER_NAME="${IPAD860_CONTAINER_NAME:-${STACK_NAME}-ipad860}"
+IPAD860_CONTAINER_NAME_INPUT="${IPAD860_CONTAINER_NAME:-}"
+IPAD860_CONTAINER_NAME="${IPAD860_CONTAINER_NAME_INPUT:-${STACK_NAME}-ipad860}"
 DOCKER=(docker)
 SUDO=""
 FAILED_CHECKS=()
 CURRENT_LINK_EXPLICIT=0
+APP_CONTAINER_NAME_EXPLICIT=0
+MYSQL_CONTAINER_NAME_EXPLICIT=0
+REDIS_CONTAINER_NAME_EXPLICIT=0
+IPAD860_CONTAINER_NAME_EXPLICIT=0
 STACK_DIR_NAME=""
 APP_ROLE="${APP_ROLE:-${ROLE:-standalone}}"
 MYSQL_HOST="${MYSQL_HOST:-mysql}"
@@ -62,14 +70,34 @@ fi
 if [ -n "${CURRENT_LINK_INPUT}" ]; then
     CURRENT_LINK_EXPLICIT=1
 fi
+if [ -n "${APP_CONTAINER_NAME_INPUT}" ]; then
+    APP_CONTAINER_NAME_EXPLICIT=1
+fi
+if [ -n "${MYSQL_CONTAINER_NAME_INPUT}" ]; then
+    MYSQL_CONTAINER_NAME_EXPLICIT=1
+fi
+if [ -n "${REDIS_CONTAINER_NAME_INPUT}" ]; then
+    REDIS_CONTAINER_NAME_EXPLICIT=1
+fi
+if [ -n "${IPAD860_CONTAINER_NAME_INPUT}" ]; then
+    IPAD860_CONTAINER_NAME_EXPLICIT=1
+fi
 
 refresh_stack_layout() {
     STACK_NAME="$(normalize_stack_name "${STACK_NAME:-qq-farm}")"
     STACK_DIR_NAME="$(stack_dir_name "${STACK_NAME}")"
-    APP_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "bot")"
-    MYSQL_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "mysql")"
-    REDIS_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "redis")"
-    IPAD860_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "ipad860")"
+    if [ "${APP_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        APP_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "bot")"
+    fi
+    if [ "${MYSQL_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        MYSQL_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "mysql")"
+    fi
+    if [ "${REDIS_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        REDIS_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "redis")"
+    fi
+    if [ "${IPAD860_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        IPAD860_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "ipad860")"
+    fi
     if [ "${CURRENT_LINK_EXPLICIT}" != "1" ]; then
         CURRENT_LINK="$(stack_current_link_path "${DEPLOY_BASE_DIR}" "${STACK_NAME}")"
     fi
@@ -182,6 +210,18 @@ load_deploy_env() {
         # shellcheck disable=SC1090
         . "${file}"
         set +a
+        if [ -n "${APP_CONTAINER_NAME:-}" ]; then
+            APP_CONTAINER_NAME_EXPLICIT=1
+        fi
+        if [ -n "${MYSQL_CONTAINER_NAME:-}" ]; then
+            MYSQL_CONTAINER_NAME_EXPLICIT=1
+        fi
+        if [ -n "${REDIS_CONTAINER_NAME:-}" ]; then
+            REDIS_CONTAINER_NAME_EXPLICIT=1
+        fi
+        if [ -n "${IPAD860_CONTAINER_NAME:-}" ]; then
+            IPAD860_CONTAINER_NAME_EXPLICIT=1
+        fi
         refresh_stack_layout
     fi
 }
