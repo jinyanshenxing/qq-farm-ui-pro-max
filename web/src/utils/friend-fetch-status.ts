@@ -45,7 +45,7 @@ export function formatFriendFetchReasonLabel(reason: string) {
   if (value === 'empty')
     return '接口未返回可用好友'
   if (value === 'cooldown')
-    return '当前处于静默期'
+    return '当前先休息一会'
   if (value === 'error')
     return '接口请求异常'
   if (value === 'worker_error')
@@ -72,7 +72,7 @@ export function formatFriendGuardResultLabel(result: string) {
   if (value === 'realtime_unavailable')
     return '实时好友暂不可用'
   if (value === 'manual_refresh_probe')
-    return '手动刷新穿透静默'
+    return '手动刷新临时再试'
   if (value === 'cache_fallback')
     return '已回退缓存'
   if (value === 'error_cache')
@@ -124,7 +124,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
       if (reason === 'self_only')
         description = '微信实时好友当前只返回你自己，系统已回退到缓存好友，并暂停重复实时探测。'
       else if (reason === 'empty')
-        description = '微信实时好友当前没有返回可用好友，系统已回退到缓存好友，并进入一段时间的静默期。'
+        description = '微信实时好友当前没有返回可用好友，系统已回退到缓存好友，并先休息一会。'
       else if (reason === 'error' || reason === 'request_failed')
         description = '微信实时好友当前请求异常，系统已回退到缓存好友，并暂停短时间内的重复尝试。'
       else if (reason === 'worker_error')
@@ -133,7 +133,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
         tone: 'warning',
         title: '微信好友链路已回退缓存',
         description: appendCooldownHint(description, cooldownText),
-        badge: '缓存视图',
+        badge: '缓存展示',
       }
     }
 
@@ -163,7 +163,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
         tone: 'danger',
         title: '微信好友链路未拿到可用结果',
         description: appendSeedCacheHint(appendCooldownHint(description, cooldownText)),
-        badge: '实时受限',
+        badge: '暂未同步',
       }
     }
   }
@@ -174,7 +174,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
         tone: 'warning',
         title: 'QQ 保守链路已回退缓存',
         description: '这次 SyncAll 没有拿到可用实时好友，页面已回退到缓存好友，系统不会继续追加其他接口探测。',
-        badge: '缓存视图',
+        badge: '缓存展示',
       }
     }
 
@@ -183,7 +183,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
         tone: 'danger',
         title: 'QQ 保守链路未拿到可用好友',
         description: '这次 SyncAll 没有拿到可用实时好友，而且当前也没有可回退的缓存好友，所以页面暂时无法展示好友。',
-        badge: '实时受限',
+        badge: '暂未同步',
       }
     }
   }
@@ -193,7 +193,7 @@ export function buildFriendFetchBannerCopy(meta: FriendFetchMetaLike | null | un
       tone: 'warning',
       title: '好友列表已回退缓存',
       description: '本轮未拿到最新好友列表，页面已回退到缓存数据，内容可能不是最新状态。',
-      badge: '缓存视图',
+      badge: '缓存展示',
     }
   }
 
@@ -232,16 +232,16 @@ export function buildFriendGuardCopy(params: FriendGuardCopyParams): FriendStatu
     }
 
     if (result === 'realtime_unavailable') {
-      let description = '微信实时好友当前没有可用结果，系统已暂停自动实时探测，改走缓存或空结果保护。'
+      let description = '微信实时好友当前没有可用结果，系统已暂停自动实时探测，改走缓存或空结果模式。'
       if (reason === 'self_only')
-        description = '微信实时好友当前只返回你自己，系统已暂停自动实时探测，改走缓存或空结果保护。'
+        description = '微信实时好友当前只返回你自己，系统已暂停自动实时探测，改走缓存或空结果模式。'
       else if (reason === 'empty')
-        description = '微信实时好友当前没有返回可用好友，系统已暂停自动实时探测，改走缓存或空结果保护。'
+        description = '微信实时好友当前没有返回可用好友，系统已暂停自动实时探测，改走缓存或空结果模式。'
       else if (reason === 'error')
-        description = '微信实时好友当前请求异常，系统已暂停自动实时探测，改走缓存或空结果保护。'
+        description = '微信实时好友当前请求异常，系统已暂停自动实时探测，改走缓存或空结果模式。'
       return {
         tone: 'warning',
-        title: '微信实时好友已进入静默期',
+        title: '微信实时好友先休息一会',
         description,
       }
     }
@@ -249,7 +249,7 @@ export function buildFriendGuardCopy(params: FriendGuardCopyParams): FriendStatu
     if (result === 'manual_refresh_probe') {
       return {
         tone: 'info',
-        title: '手动刷新已临时穿透微信静默期',
+        title: '手动刷新已临时再试一次',
         description: '这次请求是手动触发的单次探测，只会额外打一轮 GetAll，不会恢复自动重试。',
       }
     }
@@ -276,7 +276,7 @@ export function buildFriendGuardCopy(params: FriendGuardCopyParams): FriendStatu
         title: '微信好友链路未拿到可用结果',
         description: result === 'error_empty'
           ? '微信实时好友当前请求异常，而且没有可回退的缓存好友，所以本轮直接停止。'
-          : '微信实时好友当前处于静默或兼容冷却期，而且没有可用缓存，因此本轮只返回空结果。',
+          : '微信实时好友当前处于休息一会或兼容冷却期，而且没有可用缓存，因此本轮只返回空结果。',
       }
     }
   }
@@ -312,8 +312,8 @@ export function buildFriendGuardCopy(params: FriendGuardCopyParams): FriendStatu
       tone: event === 'qq_friend_fetch_guard'
         ? ((result === 'empty' || result === 'blocked') ? 'danger' : 'warning')
         : ((result === 'error_empty' || result === 'empty') ? 'danger' : 'warning'),
-      title: event === 'wx_friend_fetch_guard' ? '微信好友链路保护' : 'QQ 好友链路保护',
-      description: '本条日志记录了好友链路保护动作。',
+      title: event === 'wx_friend_fetch_guard' ? '微信好友链路说明' : 'QQ 好友链路说明',
+      description: '本条日志记录了好友链路状态调整。',
     }
   }
 

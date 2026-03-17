@@ -8,6 +8,7 @@
 
 ### 快速索引（精简版）
 
+- `v4.5.23 (2026-03-17)` 微信休息保护可视化与保守链路细化：连续失败阈值、农场休息、账号面板状态透出与补缓存链路稳健性同步收口。
 - `v4.5.22 (2026-03-17)` 微信好友保守链路与只读面板增强：手动刷新穿透、访客补缓存、只读好友页、日志摘要与快捷筛选同步落地。
 - `v4.5.21 (2026-03-16)` QQ 风控守卫与设置体验统一优化：高风险窗口、封禁阻断、多链路好友抓取开关与主界面整理同步落地。
 - `v4.5.20 (2026-03-11)` 发布链路归一与本地 Release 产物打包：本地/CI 统一输出二进制与部署包，Docker 推送脚本收口，旧服兼容软链补齐。
@@ -21,6 +22,28 @@
 - `v4.5.6 (2026-03-08)` 用户状态与登录链路修复：`users.status` 语义拆分、QQ/微信登录续航增强、发布链路稳健性提升。
 
 > 说明：以上为“快速浏览摘要”；完整变更、验证命令与问题复盘请以下方详细记录为准。
+
+### 开发补记 - v4.5.23 微信休息保护可视化与保守链路细化 (2026-03-17)
+
+#### ✅ 本轮发布收口
+- ✅ **版本口径已抬升到 `v4.5.23`**: `core/package.json`、`web/package.json`、部署模板、Docker 工作流默认值、离线包脚本与更新脚本中的默认镜像标签已经同步更新。
+- ✅ **微信好友链路改为“连续失败后再休息”**: `friend-actions.js` 现在会累计 `GetAll` 的 self-only / empty / error 连续失败次数，只有达到阈值后才进入冷却，并区分“有缓存回退”和“无缓存空结果”两类保护时长。
+- ✅ **账号面板 / 仪表盘 / 日志补齐保护状态可视化**: `worker.js`、`data-provider.js`、`runtime-state.js`、`Dashboard.vue`、`AccountOwnership.vue`、`SystemLogs.vue` 现在会透出微信好友休息、农场休息、失败原因、剩余时间和 SyncAll 兼容状态。
+- ✅ **微信账号休息期间暂停自家农场自动操作**: `farm.js` 在 `wx_car / wx_ipad` 账号进入休息时段时，会直接跳过自家农场自动操作，避免好友链路已经降级时仍继续发起高频动作。
+- ✅ **好友补缓存链路继续加固**: `friend-cache-seeds.js` 改为延迟解析 `mergeFriendsCache`，`network.js` 的通知型补种现在会附带账号标识，减少模块加载顺序和多账号场景下的误写风险。
+- ✅ **风控与日志文案统一改为“休息”语义**: `worker-manager.js`、`friend-scanner.js`、`network.js`、前端好友状态文案统一从“静默/风控”收口为更贴合当前策略的“休息一会/状态说明”表述。
+
+#### 📌 本轮发布说明
+- 📌 **这轮重点不是再加更多探测，而是把已有保护讲清楚、做稳**: 后端现在能更细粒度地区分“连续失败但暂不长休”“已回退缓存”“无缓存只能空结果”，前端则把这些状态直接展示给管理员。
+- 📌 **微信平台的农场自动化进一步保守**: `wx_car` / `wx_ipad` 账号在休息时段里不再继续跑自家农场自动操作，整体行为更接近“先停一会儿再恢复”。
+
+#### 🧪 本轮验收
+- ✅ `node --test core/__tests__/friend-cache-seeds.test.js core/__tests__/data-provider-wechat-protection.test.js core/__tests__/farm-wechat-suspend-guard.test.js core/__tests__/friend-actions-wechat-conservative.test.js core/__tests__/friend-actions-cache-fallback.test.js core/__tests__/friend-actions-get-game-friends.test.js core/__tests__/friend-actions-passive-seed.test.js core/__tests__/friend-actions-get-game-friends-direct.test.js core/__tests__/friend-scanner-identifier.test.js`
+- ✅ `pnpm lint:web`
+- ✅ `pnpm test:web:regression`
+- ✅ `pnpm check:doc-links`
+- ⚠️ `pnpm check:announcements`：0 error(s), 1 warning(s)，`logs/development/Update.log` 仍有 1 条 bullet 超过 120 字符
+- ✅ `bash -n scripts/deploy/*.sh deploy/scripts/*.sh scripts/docker/*.sh scripts/release/*.sh`
 
 ### 开发补记 - v4.5.22 微信好友保守链路与只读面板增强 (2026-03-17)
 

@@ -23,6 +23,8 @@ const farmPhaseLogger = createModuleLogger('farm-phase');
 const verbosePhaseDebugEnabled = String(process.env.FARM_VERBOSE_PHASE_DEBUG || '') === '1';
 const HIGH_RISK_QQ_GUARD_TTL_MS = 5 * 60 * 1000;
 const highRiskQqGuardLogState = new Map();
+const WECHAT_SUSPEND_GUARD_TTL_MS = 5 * 60 * 1000;
+const wechatSuspendGuardLogState = new Map();
 
 function logFarmPhaseDebug(message, meta = {}) {
     if (!verbosePhaseDebugEnabled) return;
@@ -31,6 +33,11 @@ function logFarmPhaseDebug(message, meta = {}) {
 
 function isQQPlatform() {
     return String(CONFIG.platform || '').trim().toLowerCase() === 'qq';
+}
+
+function isWeChatRiskSensitivePlatform() {
+    const platform = String(CONFIG.platform || '').trim().toLowerCase();
+    return platform === 'wx_car' || platform === 'wx_ipad';
 }
 
 function isQQHighRiskAutomationAllowed() {
@@ -49,6 +56,26 @@ function logQQHighRiskGuard(cacheKey, message, meta = {}) {
         module: 'farm',
         event: 'qq_high_risk_guard',
         result: 'blocked',
+        ...meta,
+    });
+}
+
+function shouldPauseFarmDuringSuspend(state = null) {
+    const runtimeState = state || getUserState();
+    return !!(runtimeState && Number(runtimeState.suspendUntil || 0) > Date.now() && isWeChatRiskSensitivePlatform());
+}
+
+function logWeChatSuspendGuard(cacheKey, message, meta = {}) {
+    if (!isWeChatRiskSensitivePlatform()) return;
+    const now = Date.now();
+    const previous = wechatSuspendGuardLogState.get(cacheKey) || 0;
+    if (now - previous < WECHAT_SUSPEND_GUARD_TTL_MS) return;
+    wechatSuspendGuardLogState.set(cacheKey, now);
+    logWarn('安全', message, {
+        module: 'farm',
+        event: 'wx_suspend_guard',
+        result: 'auto_farm_suspended',
+        platform: CONFIG.platform,
         ...meta,
     });
 }
@@ -1015,7 +1042,7 @@ async function antiStealHarvest(landId) {
         // [P0] 风控休眠绝对互斥屏障
         const state = getUserState();
         if (state.suspendUntil && Date.now() < state.suspendUntil) {
-            logWarn('防封', `[防偷熔断] 账号正处于风控强休眠期(至 ${new Date(state.suspendUntil).toLocaleTimeString()})，强制阻断 土地#${landId} 防偷发包，宁弃菜保号！`);
+            logWarn('防封', `[防偷熔断] 账号正处于休息时段(至 ${new Date(state.suspendUntil).toLocaleTimeString()})，已取消 土地#${landId} 的防偷发包。`);
             return;
         }
 
@@ -2356,7 +2383,15 @@ async function checkFarm() {
     const isSuspended = state.suspendUntil && Date.now() < state.suspendUntil;
     if (isSuspended) {
         const resetMinutes = Math.ceil((state.suspendUntil - Date.now()) / 60000);
-        log('农场', `风控休眠中 (剩余约 ${resetMinutes} 分钟)，仍检查自家土地收获与播种...`);
+        if (shouldPauseFarmDuringSuspend(state)) {
+            logWeChatSuspendGuard(
+                'wechat_suspend_auto_farm',
+                `休息中 (剩余约 ${resetMinutes} 分钟)，当前平台 ${CONFIG.platform} 已暂停自家农场自动操作，避免继续打扰微信好友链路。`,
+                { suspendUntil: Number(state.suspendUntil) || 0 },
+            );
+        } else {
+            log('农场', `休息中 (剩余约 ${resetMinutes} 分钟)，仍检查自家土地收获与播种...`);
+        }
     }
 
     // ======== Ghosting 打盹：主动随机触发休眠，模拟人类离开（休眠期间跳过） ========
@@ -2381,7 +2416,7 @@ async function checkFarm() {
                 if (CONFIG.accountId) {
                     recordSuspendUntil(CONFIG.accountId, state.suspendUntil);
                 }
-                log('风控', `🛏️ Ghosting 打盹触发：模拟人类离开，休眠 ${napMinutes} 分钟`, {
+                log('状态', `🛏️ Ghosting 打盹触发：模拟人类离开，休息 ${napMinutes} 分钟`, {
                     module: 'farm', event: 'ghosting_nap', result: 'triggered',
                     napMinutes, resumeAt: new Date(state.suspendUntil).toLocaleTimeString(),
                 });
@@ -2419,6 +2454,11 @@ async function checkFarm() {
  * @param {string} opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
  */
 async function runFarmOperation(opType) {
+    const state = getUserState();
+    if (shouldPauseFarmDuringSuspend(state)) {
+        return { hadWork: false, actions: [] };
+    }
+
     const landsReply = await getAllLands();
     if (!landsReply.lands || landsReply.lands.length === 0) {
         if (opType !== 'all') {
@@ -2674,6 +2714,7 @@ function resetFarmRuntimeState() {
     smartPhaseFertilizeMarks.clear();
     lastModeScopeLogState = '';
     lastModeScopeLogAt = 0;
+    wechatSuspendGuardLogState.clear();
     visitorCache.clear();
     onOperationLimitsUpdate = null;
     consecutiveErrors = 0;

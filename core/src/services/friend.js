@@ -11,7 +11,6 @@
 const actions = require('./friend/friend-actions');
 const decision = require('./friend/friend-decision');
 const scanner = require('./friend/friend-scanner');
-const state = require('./friend/friend-state');
 const { resetRuntimeAccountModePolicyState } = require('./account-mode-policy');
 
 function resetFriendRuntimeState() {
@@ -39,6 +38,7 @@ module.exports = {
 
     // 数据获取入口
     getOperationLimits: actions.getOperationLimits,
+    getFriendFetchDiagnostics: actions.getFriendFetchDiagnostics,
     getFriendsList: scanner.getFriendsList,
     getFriendLandsDetail: scanner.getFriendLandsDetail,
 

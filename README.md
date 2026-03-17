@@ -2,7 +2,7 @@
 
 > 🔴 **醒目提醒：现在扫码登录失效，等其他大佬修复，本仓库暂停更新功能，仅修复bug了。**基于 Node.js 的 QQ 农场自动化工具，支持多账号管理、Web 控制面板、实时日志与数据分析。
 
-![版本](https://img.shields.io/badge/版本-v4.5.22-blue)
+![版本](https://img.shields.io/badge/版本-v4.5.23-blue)
 ![Node.js](https://img.shields.io/badge/Node.js-20+-green)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange)
 ![Redis](https://img.shields.io/badge/Redis-6.0-red)
@@ -309,7 +309,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/m
 如需固定镜像版本或覆盖仓库，可在 `.env` 中设置：
 
 ```bash
-APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.22
+APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.23
 MYSQL_IMAGE=mysql:8.0
 REDIS_IMAGE=redis:7-alpine
 IPAD860_IMAGE=smdk000/ipad860:latest
@@ -364,7 +364,7 @@ bash install-or-update.sh --action update --preserve-current
 bash update-app.sh
 
 # 如需切到指定版本
-bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.22
+bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.23
 
 # 弱网 / 离线环境：先 docker load，再用离线镜像包更新
 bash update-app.sh --image-archive /root/qq-farm-bot-images-amd64.tar.gz
@@ -419,8 +419,8 @@ curl http://localhost:3080/api/ping
 
 - `qq-farm-bot-images-amd64.tar.gz`
 - `qq-farm-bot-images-arm64.tar.gz`
-- `qq-farm-bot-v4.5.22-offline-amd64.tar.gz`
-- `qq-farm-bot-v4.5.22-offline-arm64.tar.gz`
+- `qq-farm-bot-v4.5.23-offline-amd64.tar.gz`
+- `qq-farm-bot-v4.5.23-offline-arm64.tar.gz`
 
 其中 `arm64` 离线包里的 `ipad860` 仍是 `linux/amd64`，目标宿主机需支持 QEMU。
 
@@ -454,7 +454,7 @@ echo $GH_PAT | docker login ghcr.io -u smdk000 --password-stdin
 **使用脚本构建（推荐）**:
 ```bash
 chmod +x scripts/docker/docker-build-multiarch.sh
-./scripts/docker/docker-build-multiarch.sh --version 4.5.22
+./scripts/docker/docker-build-multiarch.sh --version 4.5.23
 ```
 
 **手动构建**:
@@ -462,7 +462,7 @@ chmod +x scripts/docker/docker-build-multiarch.sh
 # 构建并推送到 Docker Hub
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t smdk000/qq-farm-bot-ui:4.5.22 \
+  -t smdk000/qq-farm-bot-ui:4.5.23 \
   -t smdk000/qq-farm-bot-ui:latest \
   -f core/Dockerfile . \
   --push
@@ -470,7 +470,7 @@ docker buildx build \
 # 构建并推送到 GitHub Container Registry
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/smdk000/qq-farm-ui-pro-max:4.5.22 \
+  -t ghcr.io/smdk000/qq-farm-ui-pro-max:4.5.23 \
   -t ghcr.io/smdk000/qq-farm-ui-pro-max:latest \
   -f core/Dockerfile . \
   --push
@@ -480,7 +480,7 @@ docker buildx build \
 
 ```bash
 chmod +x scripts/release/build-release-assets.sh
-./scripts/release/build-release-assets.sh --version v4.5.22
+./scripts/release/build-release-assets.sh --version v4.5.23
 
 # 产物默认输出到 ./release-assets
 ls release-assets
@@ -490,7 +490,7 @@ ls release-assets
 
 ```bash
 # 查看镜像信息
-docker buildx imagetools inspect smdk000/qq-farm-bot-ui:4.5.22
+docker buildx imagetools inspect smdk000/qq-farm-bot-ui:4.5.23
 
 # Docker Hub 查看
 # https://hub.docker.com/r/smdk000/qq-farm-bot-ui/tags
@@ -724,7 +724,7 @@ Docker 会自动选择适合您系统架构的镜像版本。
 
 **维护者**: smdk000
 **最后更新**: 2026-03-17
-**版本**: v4.5.22
+**版本**: v4.5.23
 
 ## 多用户模式
 
@@ -1097,6 +1097,12 @@ ISC License
 ---
 
 ## 🎉 最近更新
+
+### v4.5.23 - 微信休息保护可视化与保守链路细化 (2026-03-17)
+- ✅ 微信好友链路现在只有在连续多次 `GetAll` 自己可见 / 空结果 / 请求异常后才进入“休息一会”，并会区分“缓存回退”和“无缓存空结果”两种状态。
+- ✅ 账号归属页、仪表盘与系统日志已补齐微信保护状态展示，可直接看到好友休息、农场休息、失败原因与剩余时长。
+- ✅ `wx_car` / `wx_ipad` 在账号休息期间会暂停自家农场自动操作，同时好友、网络和日志文案统一改为更温和的“休息”表达。
+- ✅ 好友补缓存链路继续加固：通知型补种现在会带上账号标识，`mergeFriendsCache` 改为延迟解析，避免测试或模块加载顺序影响运行。
 
 ### v4.5.22 - 微信好友保守链路与只读面板增强 (2026-03-17)
 - ✅ 微信好友拉取新增静默保护、手动刷新穿透与缓存回退，减少接口不可用时的重复探测与误判。

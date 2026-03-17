@@ -330,9 +330,12 @@ const protectionHint = computed(() => {
     return ''
 
   const suspendRemainSec = Number(protection.suspendRemainSec || 0)
+  const wechat = (protection.wechat && typeof protection.wechat === 'object') ? protection.wechat : {}
   if (protection.suspended && suspendRemainSec > 0) {
     const minutes = Math.max(1, Math.ceil(suspendRemainSec / 60))
-    return `账号休眠中（约 ${minutes} 分钟）`
+    if (wechat.farmAutomationPaused)
+      return `账号正在稍作休息（约 ${minutes} 分钟），微信农场自动操作已先停一会儿`
+    return `账号正在稍作休息（约 ${minutes} 分钟）`
   }
 
   const breaker = protection.networkBreaker || {}
@@ -340,11 +343,17 @@ const protectionHint = computed(() => {
   const breakerRemainSec = Number(breaker.cooldownRemainingSec || 0)
   if (breakerState === 'OPEN' && breakerRemainSec > 0) {
     const minutes = Math.max(1, Math.ceil(breakerRemainSec / 60))
-    return `风控保护中（约 ${minutes} 分钟）`
+    return `连接稍后再试（约 ${minutes} 分钟）`
   }
 
   if (breakerState === 'HALF_OPEN')
-    return '风控保护试探恢复中'
+    return '连接恢复中'
+
+  const friendGuardRemainSec = Number(wechat.friendCooldownRemainSec || 0)
+  if (wechat.friendGuardActive && friendGuardRemainSec > 0) {
+    const minutes = Math.max(1, Math.ceil(friendGuardRemainSec / 60))
+    return `微信好友休息一会（约 ${minutes} 分钟）`
+  }
 
   return ''
 })

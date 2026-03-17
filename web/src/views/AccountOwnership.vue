@@ -28,6 +28,7 @@ import BaseTableSectionCard from '@/components/ui/BaseTableSectionCard.vue'
 import BaseTableToolbar from '@/components/ui/BaseTableToolbar.vue'
 import { useCopyInteraction } from '@/composables/use-copy-interaction'
 import { useToastStore } from '@/stores/toast'
+import { formatFriendFetchReasonLabel } from '@/utils/friend-fetch-status'
 import { createActionButton, createActionButtons, createButtonField, createChip, createChips, createFilterFields, createHistoryHighlight, createHistoryMetaItem, createHistoryMetaItems, createHistoryMetric, createHistoryMetrics, createHistoryPanel, createHistoryRecentItem, createHistoryRecentItems, createInputField, createPageHeaderText, createSelectField, createStatCard, createStatCards } from '@/utils/management-schema'
 
 interface AccountItem {
@@ -45,6 +46,23 @@ interface AccountItem {
   accountZone?: string
   running?: boolean
   connected?: boolean
+  protection?: {
+    suspended?: boolean
+    suspendUntil?: number
+    suspendRemainSec?: number
+    wechat?: {
+      enabled?: boolean
+      friendGuardActive?: boolean
+      friendGuardReason?: string
+      friendCooldownUntil?: number
+      friendCooldownRemainSec?: number
+      syncAllUnsupportedUntil?: number
+      failureCount?: number
+      failureReason?: string
+      failureAt?: number
+      farmAutomationPaused?: boolean
+    }
+  }
 }
 
 interface UserItem {
@@ -103,6 +121,8 @@ const deleteTarget = ref<AccountItem | null>(null)
 const deleteLoading = ref(false)
 const runtimeActionId = ref('')
 const activeActionMenuId = ref('')
+const runtimeNowTs = ref(Date.now())
+let runtimeNowTimer: ReturnType<typeof setInterval> | null = null
 
 const showBatchConfirm = ref(false)
 const batchAction = ref<BatchOwnershipAction>('')
@@ -214,6 +234,82 @@ function resolveAccountState(account: AccountItem) {
     return { key: 'starting', label: '启动中', badgeTone: 'warning' as const }
   }
   return { key: 'offline', label: '已停止', badgeTone: 'neutral' as const }
+}
+
+function formatRuntimeDurationFromSeconds(totalSeconds: number) {
+  const seconds = Math.max(0, Math.ceil(Number(totalSeconds) || 0))
+  if (seconds < 60)
+    return `${seconds} 秒`
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0)
+    return minutes > 0 ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`
+  return `${minutes} 分钟`
+}
+
+function getWechatProtection(account: AccountItem) {
+  const protection = (account.protection && typeof account.protection === 'object') ? account.protection : null
+  const wechat = (protection?.wechat && typeof protection.wechat === 'object') ? protection.wechat : null
+  return {
+    protection,
+    wechat,
+  }
+}
+
+function resolveWechatGuardBadges(account: AccountItem) {
+  const { wechat } = getWechatProtection(account)
+  if (!wechat?.enabled)
+    return []
+
+  const badges: Array<{ label: string, tone: 'warning' | 'danger' | 'info' }> = []
+  if (wechat.friendGuardActive) {
+    badges.push({
+      label: '好友休息一会',
+      tone: 'warning',
+    })
+  }
+  if (wechat.farmAutomationPaused) {
+    badges.push({
+      label: '农场休息',
+      tone: 'danger',
+    })
+  }
+  if (!wechat.friendGuardActive && Number(wechat.syncAllUnsupportedUntil || 0) > runtimeNowTs.value) {
+    badges.push({
+      label: '跳过 SyncAll',
+      tone: 'info',
+    })
+  }
+  return badges
+}
+
+function resolveWechatGuardNote(account: AccountItem) {
+  const { protection, wechat } = getWechatProtection(account)
+  if (!wechat?.enabled)
+    return ''
+
+  const notes: string[] = []
+  if (wechat.friendGuardActive) {
+    const reasonLabel = formatFriendFetchReasonLabel(String(wechat.friendGuardReason || ''))
+    const remainSec = Math.max(
+      0,
+      Number(wechat.friendCooldownRemainSec || 0),
+      Math.ceil((Number(wechat.friendCooldownUntil || 0) - runtimeNowTs.value) / 1000),
+    )
+    notes.push(remainSec > 0
+      ? `微信好友：${reasonLabel}，约 ${formatRuntimeDurationFromSeconds(remainSec)} 后再试`
+      : `微信好友：${reasonLabel}`)
+  }
+  if (wechat.farmAutomationPaused) {
+    const suspendRemainSec = Math.max(0, Number(protection?.suspendRemainSec || 0))
+    notes.push(suspendRemainSec > 0
+      ? `微信农场自动操作正在休息，约 ${formatRuntimeDurationFromSeconds(suspendRemainSec)} 后恢复`
+      : '微信农场自动操作正在休息')
+  }
+  if (!notes.length && Number(wechat.syncAllUnsupportedUntil || 0) > runtimeNowTs.value) {
+    notes.push('当前微信账号已记忆为不支持 SyncAll，好友链路固定走 GetAll')
+  }
+  return notes.join('；')
 }
 
 function resolveDegradeReasonLabel(reason?: string) {
@@ -1583,10 +1679,17 @@ onMounted(() => {
   loadData()
   loadActionHistory()
   document.addEventListener('click', handleDocumentClick)
+  runtimeNowTimer = setInterval(() => {
+    runtimeNowTs.value = Date.now()
+  }, 30_000)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', handleDocumentClick)
+  if (runtimeNowTimer) {
+    clearInterval(runtimeNowTimer)
+    runtimeNowTimer = null
+  }
 })
 </script>
 
@@ -1718,6 +1821,14 @@ onBeforeUnmount(() => {
                   <BaseBadge v-if="resolveModeExecutionMeta(account)" surface="meta" :tone="resolveModeExecutionMeta(account)?.badgeTone">
                     {{ resolveModeExecutionMeta(account)?.label }}
                   </BaseBadge>
+                  <BaseBadge
+                    v-for="badge in resolveWechatGuardBadges(account)"
+                    :key="`${account.id}-${badge.label}`"
+                    surface="meta"
+                    :tone="badge.tone"
+                  >
+                    {{ badge.label }}
+                  </BaseBadge>
                 </div>
 
                 <div class="ui-mobile-record-grid">
@@ -1743,6 +1854,14 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="ui-mobile-record-value" :class="resolveModeExecutionMeta(account)?.noteClass">
                       {{ resolveModeExecutionMeta(account)?.note }}
+                    </div>
+                  </div>
+                  <div v-if="resolveWechatGuardNote(account)" class="ui-mobile-record-field ui-mobile-record-field--full">
+                    <div class="ui-mobile-record-label">
+                      状态说明
+                    </div>
+                    <div class="ui-mobile-record-value ownership-note-warning">
+                      {{ resolveWechatGuardNote(account) }}
                     </div>
                   </div>
                 </div>
@@ -1876,9 +1995,24 @@ onBeforeUnmount(() => {
                 </div>
               </td>
               <td class="px-4 py-4 align-top">
-                <BaseBadge surface="meta" :tone="resolveAccountState(account).badgeTone">
-                  {{ resolveAccountState(account).label }}
-                </BaseBadge>
+                <div class="space-y-2">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <BaseBadge surface="meta" :tone="resolveAccountState(account).badgeTone">
+                      {{ resolveAccountState(account).label }}
+                    </BaseBadge>
+                    <BaseBadge
+                      v-for="badge in resolveWechatGuardBadges(account)"
+                      :key="`${account.id}-table-${badge.label}`"
+                      surface="meta"
+                      :tone="badge.tone"
+                    >
+                      {{ badge.label }}
+                    </BaseBadge>
+                  </div>
+                  <div v-if="resolveWechatGuardNote(account)" class="ownership-note-warning text-xs leading-5">
+                    {{ resolveWechatGuardNote(account) }}
+                  </div>
+                </div>
               </td>
               <td class="px-4 py-4 align-top">
                 <div class="ownership-action-menu">
@@ -2069,6 +2203,10 @@ onBeforeUnmount(() => {
 
 .ownership-note-info {
   color: var(--ui-status-info);
+}
+
+.ownership-note-warning {
+  color: var(--ui-status-warning);
 }
 
 .ownership-history-title {

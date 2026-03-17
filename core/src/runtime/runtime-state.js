@@ -155,6 +155,18 @@ function createRuntimeState(options) {
                     failures: 0,
                     threshold: 0,
                 },
+                wechat: {
+                    enabled: false,
+                    friendGuardActive: false,
+                    friendGuardReason: '',
+                    friendCooldownUntil: 0,
+                    friendCooldownRemainSec: 0,
+                    syncAllUnsupportedUntil: 0,
+                    failureCount: 0,
+                    failureReason: '',
+                    failureAt: 0,
+                    farmAutomationPaused: false,
+                },
             },
         };
     }

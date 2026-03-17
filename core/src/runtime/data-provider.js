@@ -160,6 +160,43 @@ function createDataProvider(options) {
         return true;
     }
 
+    function buildDefaultProtectionSnapshot(account) {
+        const nowMs = Date.now();
+        const accountId = String(account && account.id || '').trim();
+        const suspendUntil = typeof store.getSuspendUntil === 'function'
+            ? Math.max(0, Number(store.getSuspendUntil(accountId) || 0))
+            : 0;
+        const platform = String(account && account.platform || '').trim().toLowerCase();
+        const suspendRemainSec = suspendUntil > nowMs
+            ? Math.max(0, Math.ceil((suspendUntil - nowMs) / 1000))
+            : 0;
+        return {
+            nowSec: Math.floor(nowMs / 1000),
+            suspended: suspendUntil > nowMs,
+            suspendUntil,
+            suspendRemainSec,
+            networkBreaker: {
+                state: '',
+                coolDownMs: 0,
+                cooldownRemainingSec: 0,
+                failures: 0,
+                threshold: 0,
+            },
+            wechat: {
+                enabled: platform.startsWith('wx'),
+                friendGuardActive: false,
+                friendGuardReason: '',
+                friendCooldownUntil: 0,
+                friendCooldownRemainSec: 0,
+                syncAllUnsupportedUntil: 0,
+                failureCount: 0,
+                failureReason: '',
+                failureAt: 0,
+                farmAutomationPaused: suspendUntil > nowMs && (platform === 'wx_car' || platform === 'wx_ipad'),
+            },
+        };
+    }
+
     return {
         resolveAccountId: async (accountRef) => await resolveAccountRefId(accountRef),
 
@@ -420,6 +457,7 @@ function createDataProvider(options) {
                 a.collaborationEnabled = false;
                 a.degradeReason = '';
                 a.degradeReasonLabel = '';
+                a.protection = buildDefaultProtectionSnapshot(a);
 
                 if (worker) {
                     a.wsError = worker.wsError ? { code: worker.wsError.code, message: worker.wsError.message } : null;
@@ -459,6 +497,22 @@ function createDataProvider(options) {
                     a.collaborationEnabled = !!worker.status.collaborationEnabled;
                     a.degradeReason = worker.status.degradeReason || '';
                     a.degradeReasonLabel = worker.status.degradeReasonLabel || '';
+                    if (panelStatus.protection && typeof panelStatus.protection === 'object') {
+                        const liveProtection = panelStatus.protection;
+                        const liveWechat = (liveProtection.wechat && typeof liveProtection.wechat === 'object') ? liveProtection.wechat : {};
+                        a.protection = {
+                            ...a.protection,
+                            ...liveProtection,
+                            networkBreaker: {
+                                ...(a.protection && a.protection.networkBreaker || {}),
+                                ...(liveProtection.networkBreaker && typeof liveProtection.networkBreaker === 'object' ? liveProtection.networkBreaker : {}),
+                            },
+                            wechat: {
+                                ...(a.protection && a.protection.wechat || {}),
+                                ...liveWechat,
+                            },
+                        };
+                    }
                 }
             });
             return data;

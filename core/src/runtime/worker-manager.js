@@ -686,7 +686,7 @@ function createWorkerManager(options) {
                 reason: `ban:${reason}`,
                 offlineMs: Number(NETWORK_COOL_DOWN_MS) || (30 * 60 * 1000),
             });
-            addAccountLog('ban_sleep', `账号 ${worker.name} 触发防刷保护，进入 ${coolDownMin} 分钟休眠`, accountId, worker.name, {
+            addAccountLog('ban_sleep', `账号 ${worker.name} 当前连接较忙，进入 ${coolDownMin} 分钟休息`, accountId, worker.name, {
                 reason,
                 coolDownMs: Number(NETWORK_COOL_DOWN_MS) || (30 * 60 * 1000),
             });

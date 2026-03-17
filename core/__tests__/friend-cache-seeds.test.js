@@ -113,3 +113,43 @@ test('cacheFriendSeeds batches delayed writes by account', async () => {
         restoreFns.reverse().forEach(restore => restore());
     }
 });
+
+test('cacheFriendSeeds resolves mergeFriendsCache lazily after module load', async () => {
+    const mergeCalls = [];
+    const restoreFns = [
+        mockModule(configModulePath, { CONFIG: { accountId: 'acc-3' } }),
+        mockModule(databaseModulePath, {}),
+        mockModule(loggerModulePath, {
+            createModuleLogger: () => ({ warn() {}, info() {}, error() {} }),
+        }),
+        mockModule(utilsModulePath, {
+            toNum: (value) => Number(value) || 0,
+        }),
+    ];
+
+    try {
+        delete require.cache[friendCacheSeedsModulePath];
+        const { cacheFriendSeeds } = require(friendCacheSeedsModulePath);
+
+        require.cache[databaseModulePath].exports = {
+            mergeFriendsCache: async (accountId, friends) => {
+                mergeCalls.push({ accountId, friends });
+            },
+        };
+
+        const ok = await cacheFriendSeeds([{ gid: 5001, name: '访客甲' }], { immediate: true });
+
+        assert.equal(ok, true);
+        assert.deepEqual(mergeCalls, [
+            {
+                accountId: 'acc-3',
+                friends: [
+                    { gid: 5001, uin: '', name: '访客甲', avatarUrl: '' },
+                ],
+            },
+        ]);
+    } finally {
+        delete require.cache[friendCacheSeedsModulePath];
+        restoreFns.reverse().forEach(restore => restore());
+    }
+});

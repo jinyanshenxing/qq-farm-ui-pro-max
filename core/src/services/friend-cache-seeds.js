@@ -1,13 +1,27 @@
 const process = require('node:process');
 
 const { CONFIG } = require('../config/config');
-const { mergeFriendsCache } = require('./database');
 const { createModuleLogger } = require('./logger');
 const { toNum } = require('../utils/utils');
 
 const logger = createModuleLogger('friend-cache-seeds');
 const DEFAULT_FLUSH_DELAY_MS = 800;
 const pendingSeedBuckets = new Map();
+
+function getMergeFriendsCache() {
+    const databaseApi = require('./database');
+    return (databaseApi && typeof databaseApi.mergeFriendsCache === 'function')
+        ? databaseApi.mergeFriendsCache
+        : null;
+}
+
+async function persistFriendSeeds(accountId, friends) {
+    const mergeFriendsCache = getMergeFriendsCache();
+    if (typeof mergeFriendsCache !== 'function') {
+        throw new TypeError('mergeFriendsCache is not a function');
+    }
+    await mergeFriendsCache(accountId, friends);
+}
 
 function resolveFriendSeedAccountId(accountId = '', userState = null) {
     const resolved = String(
@@ -129,7 +143,7 @@ async function flushQueuedFriendSeeds(accountId = '') {
     clearBucketTimer(bucket);
 
     try {
-        await mergeFriendsCache(resolvedAccountId, bucket.seeds);
+        await persistFriendSeeds(resolvedAccountId, bucket.seeds);
         return true;
     } catch (error) {
         logger.warn(`flush queued friend seeds failed(account=${resolvedAccountId}): ${error.message}`);
@@ -160,7 +174,7 @@ async function cacheFriendSeeds(seeds = [], options = {}) {
     const delayMs = Math.max(0, Number(options.delayMs ?? DEFAULT_FLUSH_DELAY_MS));
     if (options.immediate || delayMs === 0) {
         try {
-            await mergeFriendsCache(resolvedAccountId, normalizedSeeds);
+            await persistFriendSeeds(resolvedAccountId, normalizedSeeds);
             return true;
         } catch (error) {
             logger.warn(`merge friend seeds failed(account=${resolvedAccountId}): ${error.message}`);

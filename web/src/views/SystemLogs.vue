@@ -393,7 +393,7 @@ function buildFriendGuardSummary(record: any, meta: any) {
   if (result === 'realtime_unavailable') {
     metrics.push(
       { key: 'reason', label: '原因', value: formatFriendFetchReasonLabel(meta?.reason) },
-      { key: 'cooldown', label: '静默时长', value: cooldownMs > 0 ? formatMinutesLabel(Math.round(cooldownMs / 60000)) : '30 分钟' },
+      { key: 'cooldown', label: '休息时长', value: cooldownMs > 0 ? formatMinutesLabel(Math.round(cooldownMs / 60000)) : '30 分钟' },
     )
   }
   else if (result === 'sync_all_unsupported') {
@@ -405,7 +405,7 @@ function buildFriendGuardSummary(record: any, meta: any) {
   else if (result === 'cache_fallback' || result === 'error_cache') {
     metrics.push({ key: 'cachedCount', label: '缓存好友', value: `${cachedCount} 人` })
     if (cooldownMs > 0)
-      metrics.push({ key: 'cooldown', label: '静默时长', value: formatMinutesLabel(Math.round(cooldownMs / 60000)) })
+      metrics.push({ key: 'cooldown', label: '休息时长', value: formatMinutesLabel(Math.round(cooldownMs / 60000)) })
   }
   else if (result === 'error_empty' || result === 'empty') {
     metrics.push({ key: 'reason', label: '原因', value: extractErrorMessage(record?.text) })
@@ -416,13 +416,13 @@ function buildFriendGuardSummary(record: any, meta: any) {
   else {
     metrics.unshift({ key: 'event', label: '事件', value: event })
     if (cooldownSec > 0)
-      metrics.push({ key: 'cooldown', label: '静默期', value: formatSecondsLabel(cooldownSec) })
+      metrics.push({ key: 'cooldown', label: '休息一会', value: formatSecondsLabel(cooldownSec) })
   }
 
   return {
     tone: copy.tone,
     title: copy.title,
-    description: copy.description || localizeRuntimeText(String(record?.text || '').trim()) || '本条日志记录了好友链路保护动作。',
+    description: copy.description || localizeRuntimeText(String(record?.text || '').trim()) || '本条日志记录了好友链路状态调整。',
     metrics,
   }
 }

@@ -122,7 +122,7 @@ function _describeManualRefreshReason(reason) {
         case 'empty':
             return '接口未返回可用好友';
         case 'cooldown':
-            return '当前处于静默期';
+            return '当前先休息一会';
         case 'error':
             return '接口请求异常';
         case 'worker_error':
@@ -924,7 +924,7 @@ async function checkFriends(mode = 'full') {
         const resetMinutes = Math.ceil((state.suspendUntil - Date.now()) / 60000);
         _logPeriodicStatus(
             'friend_suspend',
-            `账号风控自愈休眠中，跳过本次巡回 (剩余约 ${resetMinutes} 分钟)...`,
+            `账号正在休息中，跳过本次巡回 (剩余约 ${resetMinutes} 分钟)...`,
             { level: 'warn', stateValue: `bucket:${Math.ceil(resetMinutes / 5)}` }
         );
         return false;
@@ -970,7 +970,7 @@ async function checkFriends(mode = 'full') {
         if (baseStealEnabled) {
             _logPeriodicStatus(
                 'friend_platform_auto_steal_block',
-                `当前平台 ${CONFIG.platform} 已强制关闭自动偷菜，避免触发微信链路风控`,
+                `当前平台 ${CONFIG.platform} 已强制关闭自动偷菜，避免打扰微信好友链路`,
                 {
                     level: 'warn',
                     tag: '安全',

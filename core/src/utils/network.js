@@ -33,6 +33,13 @@ const HEARTBEAT_SILENCE_TIMEOUT_MS = 60 * 1000;
 const HEARTBEAT_MAX_MISS = 2;
 const QQ_MIN_RATE_LIMIT_MS = Math.max(334, Number.parseInt(process.env.FARM_QQ_MIN_RATE_LIMIT_MS, 10) || 600);
 
+function buildFriendSeedCacheOptions(extra = {}) {
+    const accountId = String(CONFIG.accountId || process.env.FARM_ACCOUNT_ID || '').trim();
+    return accountId
+        ? { accountId, ...extra }
+        : { ...extra };
+}
+
 function getNetworkScheduler() {
     if (!networkScheduler) {
         networkScheduler = createScheduler('network');
@@ -453,7 +460,7 @@ function handleMessage(data) {
                 if (CONFIG.accountId) {
                     store.recordSuspendUntil(CONFIG.accountId, userState.suspendUntil);
                 }
-                logWarn('风控', `接口受到频率限制或被临时封禁 (1002003)，账号尝试挂起休眠`);
+                logWarn('状态', `接口遇到频率限制或临时限制 (1002003)，账号将先休息一会儿`);
                 networkEvents.emit('ban', { reason: '1002003' });
             } else if (errorCode === 0) {
                 // 请求健康，如果有半开状态，则尝试恢复
@@ -509,10 +516,10 @@ function handleNotify(msg) {
                 const lands = notify.lands || [];
                 const visitorSeeds = buildFriendSeedsFromLands(lands, userState.gid);
                 if (visitorSeeds.length > 0) {
-                    void cacheFriendSeeds(visitorSeeds, { delayMs: 250 });
+                    void cacheFriendSeeds(visitorSeeds, buildFriendSeedCacheOptions({ delayMs: 250 }));
                 }
                 if (hostGid > 0 && hostGid !== userState.gid) {
-                    void cacheFriendSeeds([{ gid: hostGid }], { delayMs: 250 });
+                    void cacheFriendSeeds([{ gid: hostGid }], buildFriendSeedCacheOptions({ delayMs: 250 }));
                 }
                 if (lands.length > 0) {
                     // 如果是自己的农场，触发事件
@@ -591,7 +598,7 @@ function handleNotify(msg) {
                 const notify = types.FriendApplicationReceivedNotify.decode(eventBody);
                 const applications = notify.applications || [];
                 if (applications.length > 0) {
-                    void cacheFriendSeeds(applications, { delayMs: 250 });
+                    void cacheFriendSeeds(applications, buildFriendSeedCacheOptions({ delayMs: 250 }));
                     networkEvents.emit('friendApplicationReceived', applications);
                 }
             } catch { }
@@ -604,7 +611,7 @@ function handleNotify(msg) {
                 const notify = types.FriendAddedNotify.decode(eventBody);
                 const friends = notify.friends || [];
                 if (friends.length > 0) {
-                    void cacheFriendSeeds(friends, { delayMs: 250 });
+                    void cacheFriendSeeds(friends, buildFriendSeedCacheOptions({ delayMs: 250 }));
                     const names = friends.map(f => f.name || f.remark || `GID:${toNum(f.gid)}`).join(', ');
                     log('好友', `新好友: ${names}`);
                 }

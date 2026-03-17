@@ -1135,6 +1135,24 @@ function syncStatus() {
     const friendAutoAcceptRemainSec = Math.max(0, Math.ceil((Number(nextFriendRunAt || 0) - nowMs) / 1000));
     const helpRemainSec = Math.max(0, Math.ceil((Number(nextHelpRunAt || 0) - nowMs) / 1000));
     const stealRemainSec = Math.max(0, Math.ceil((Number(nextStealRunAt || 0) - nowMs) / 1000));
+    const friendService = getFriendService();
+    const friendDiagnostics = typeof friendService.getFriendFetchDiagnostics === 'function'
+        ? friendService.getFriendFetchDiagnostics()
+        : null;
+    const wechatDiagnostics = friendDiagnostics && typeof friendDiagnostics.wechat === 'object'
+        ? friendDiagnostics.wechat
+        : {};
+    const platform = String(userState && userState.platform || statusData && statusData.platform || CONFIG.platform || '').trim().toLowerCase();
+    const isWeChatRiskSensitivePlatform = platform === 'wx_car' || platform === 'wx_ipad';
+    const friendCooldownUntil = Math.max(
+        0,
+        Number(wechatDiagnostics.autoRetryAt || 0),
+        Number(wechatDiagnostics.getAllParamErrorUntil || 0),
+    );
+    const friendCooldownRemainSec = friendCooldownUntil > nowMs
+        ? Math.max(0, Math.ceil((friendCooldownUntil - nowMs) / 1000))
+        : 0;
+    const syncAllUnsupportedUntil = Math.max(0, Number(wechatDiagnostics.syncAllUnsupportedUntil || 0));
     fullStats.nextChecks = {
         farmRemainSec: Math.max(0, Math.ceil((Number(nextFarmRunAt || 0) - nowMs) / 1000)),
         friendRemainSec: Math.min(friendAutoAcceptRemainSec, helpRemainSec, stealRemainSec),
@@ -1158,6 +1176,18 @@ function syncStatus() {
             cooldownRemainingSec: breakerRemainSec,
             failures: breakerSnapshot ? Number(breakerSnapshot.failures || 0) : 0,
             threshold: breakerSnapshot ? Number(breakerSnapshot.threshold || 0) : 0,
+        },
+        wechat: {
+            enabled: platform.startsWith('wx'),
+            friendGuardActive: !!(friendCooldownUntil > nowMs),
+            friendGuardReason: String(wechatDiagnostics.realtimeUnavailableReason || '').trim(),
+            friendCooldownUntil,
+            friendCooldownRemainSec,
+            syncAllUnsupportedUntil: syncAllUnsupportedUntil > nowMs ? syncAllUnsupportedUntil : 0,
+            failureCount: Math.max(0, Number(wechatDiagnostics.failureCount || 0)),
+            failureReason: String(wechatDiagnostics.failureReason || '').trim(),
+            failureAt: Math.max(0, Number(wechatDiagnostics.failureAt || 0)),
+            farmAutomationPaused: !!(isWeChatRiskSensitivePlatform && suspendUntil > nowMs),
         },
     };
     const modePolicy = getAccountModePolicyService().getRuntimeAccountModePolicy();

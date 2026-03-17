@@ -29,7 +29,10 @@ const VISITOR_FRIEND_SEED_COOLDOWN_MS = 60 * 1000;
 const QQ_CONSERVATIVE_FETCH_LOG_TTL_MS = 5 * 60 * 1000;
 const WECHAT_SYNC_ALL_UNSUPPORTED_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const WECHAT_GET_ALL_UNAVAILABLE_COOLDOWN_MS = 30 * 60 * 1000;
+const WECHAT_GET_ALL_EMPTY_COOLDOWN_MS = 2 * 60 * 1000;
 const WECHAT_CONSERVATIVE_FETCH_LOG_TTL_MS = 5 * 60 * 1000;
+const WECHAT_GET_ALL_FAILURE_STREAK_THRESHOLD = 3;
+const WECHAT_GET_ALL_FAILURE_STREAK_RESET_MS = 2 * 60 * 60 * 1000;
 const _friendFetchStateByAccount = new Map();
 const _qqConservativeFetchLogCache = new Map();
 const _wechatConservativeFetchLogCache = new Map();
@@ -323,22 +326,73 @@ function _isWeChatRealtimeUnavailable(fetchState) {
     return !!(fetchState && Number(fetchState.wechatRealtimeUnavailableUntil) > Date.now());
 }
 
-function _markWeChatRealtimeUnavailable(fetchState, resultLabel) {
+function _describeWeChatRealtimeReason(resultLabel) {
+    const reason = String(resultLabel || '').trim() || 'empty';
+    if (reason === 'self_only') return '仅返回自己';
+    if (reason === 'error') return '请求异常';
+    return '返回空';
+}
+
+function _registerWeChatRealtimeFailure(fetchState, resultLabel) {
+    if (!fetchState) return 1;
+    const now = Date.now();
+    const reason = String(resultLabel || '').trim() || 'empty';
+    const prevReason = String(fetchState.wechatRealtimeFailureReason || '').trim();
+    const prevAt = Number(fetchState.wechatRealtimeFailureAt || 0);
+    const prevCount = Math.max(0, Number(fetchState.wechatRealtimeFailureCount || 0));
+    const sameReason = prevReason === reason;
+    const withinWindow = prevAt > 0 && (now - prevAt) <= WECHAT_GET_ALL_FAILURE_STREAK_RESET_MS;
+    const nextCount = sameReason && withinWindow ? (prevCount + 1) : 1;
+
+    fetchState.wechatRealtimeFailureCount = nextCount;
+    fetchState.wechatRealtimeFailureReason = reason;
+    fetchState.wechatRealtimeFailureAt = now;
+    return nextCount;
+}
+
+function _clearWeChatRealtimeFailure(fetchState) {
     if (!fetchState) return;
-    const nextUntil = Date.now() + WECHAT_GET_ALL_UNAVAILABLE_COOLDOWN_MS;
+    fetchState.wechatRealtimeFailureCount = 0;
+    fetchState.wechatRealtimeFailureReason = '';
+    fetchState.wechatRealtimeFailureAt = 0;
+}
+
+function _markWeChatRealtimeUnavailable(fetchState, resultLabel, options = {}) {
+    if (!fetchState) return;
+    const failureCount = _registerWeChatRealtimeFailure(fetchState, resultLabel);
+    const hasCacheFallback = !!options.hasCacheFallback;
+    const reason = String(resultLabel || '').trim() || 'empty';
+    const reasonText = _describeWeChatRealtimeReason(reason);
+
+    fetchState.wechatRealtimeUnavailableReason = reason;
+    if (failureCount < WECHAT_GET_ALL_FAILURE_STREAK_THRESHOLD) {
+        fetchState.wechatRealtimeUnavailableUntil = 0;
+        _logWeChatConservativeFetch(`realtime_retry:${reason}:${failureCount}`, `微信好友链路：GetAll ${reasonText}，当前连续第 ${failureCount}/${WECHAT_GET_ALL_FAILURE_STREAK_THRESHOLD} 次异常；暂不进入长时间休息，下轮继续尝试实时探测。`, 'warn', {
+            module: 'friend',
+            event: 'wx_friend_fetch_guard',
+            result: 'realtime_retry',
+            reason,
+            failureCount,
+            threshold: WECHAT_GET_ALL_FAILURE_STREAK_THRESHOLD,
+        });
+        return;
+    }
+
+    const cooldownMs = hasCacheFallback
+        ? WECHAT_GET_ALL_UNAVAILABLE_COOLDOWN_MS
+        : WECHAT_GET_ALL_EMPTY_COOLDOWN_MS;
+    const nextUntil = Date.now() + cooldownMs;
     const changed = nextUntil > Number(fetchState.wechatRealtimeUnavailableUntil || 0);
     fetchState.wechatRealtimeUnavailableUntil = nextUntil;
-    fetchState.wechatRealtimeUnavailableReason = String(resultLabel || '').trim() || 'empty';
+    fetchState.wechatRealtimeUnavailableReason = reason;
     if (!changed) return;
-    const reasonText = fetchState.wechatRealtimeUnavailableReason === 'self_only'
-        ? '仅返回自己'
-        : (fetchState.wechatRealtimeUnavailableReason === 'error' ? '请求异常' : '返回空');
-    _logWeChatConservativeFetch(`realtime_unavailable:${fetchState.wechatRealtimeUnavailableReason}`, `微信好友链路：GetAll ${reasonText}，30 分钟内停止重复实时探测，改走缓存/静默模式。`, 'warn', {
+    _logWeChatConservativeFetch(`realtime_unavailable:${reason}:${hasCacheFallback ? 'cache' : 'empty'}`, `微信好友链路：GetAll ${reasonText}，已连续 ${failureCount} 次异常；${cooldownMs / 1000} 秒内停止重复实时探测，改走缓存/休息一会模式。`, 'warn', {
         module: 'friend',
         event: 'wx_friend_fetch_guard',
         result: 'realtime_unavailable',
-        reason: fetchState.wechatRealtimeUnavailableReason,
-        cooldownMs: WECHAT_GET_ALL_UNAVAILABLE_COOLDOWN_MS,
+        reason,
+        cooldownMs,
+        failureCount,
     });
 }
 
@@ -346,6 +400,7 @@ function _clearWeChatRealtimeUnavailable(fetchState) {
     if (!fetchState) return;
     fetchState.wechatRealtimeUnavailableUntil = 0;
     fetchState.wechatRealtimeUnavailableReason = '';
+    _clearWeChatRealtimeFailure(fetchState);
 }
 
 function _getWeChatAutoRetryAt(fetchState) {
@@ -403,7 +458,7 @@ async function _getAllViaConservativeWeChatGetAll(options = {}) {
             allowVisitorSeed: true,
         });
         if (cachedReply) {
-            _logWeChatConservativeFetch('cooldown_cache', '微信好友链路：当前处于静默/兼容冷却期，本轮仅展示缓存好友，不再重复请求实时接口。', 'warn', {
+            _logWeChatConservativeFetch('cooldown_cache', '微信好友链路：当前处于休息一会/兼容冷却期，本轮仅展示缓存好友，不再重复请求实时接口。', 'warn', {
                 module: 'friend',
                 event: 'wx_friend_fetch_guard',
                 result: 'cache_fallback',
@@ -416,7 +471,7 @@ async function _getAllViaConservativeWeChatGetAll(options = {}) {
             });
         }
 
-        _logWeChatConservativeFetch('cooldown_empty', '微信好友链路：当前处于静默/兼容冷却期，且没有可用缓存，本轮直接跳过实时探测。', 'warn', {
+        _logWeChatConservativeFetch('cooldown_empty', '微信好友链路：当前处于休息一会/兼容冷却期，且没有可用缓存，本轮直接跳过实时探测。', 'warn', {
             module: 'friend',
             event: 'wx_friend_fetch_guard',
             result: 'empty',
@@ -429,7 +484,7 @@ async function _getAllViaConservativeWeChatGetAll(options = {}) {
     }
 
     if (manualRefresh && (_isGetAllParamErrorCoolingDown(fetchState) || _isWeChatRealtimeUnavailable(fetchState))) {
-        _logWeChatConservativeFetch('manual_refresh_probe', '微信好友链路：本次由手动刷新触发，已临时穿透静默期执行一次 GetAll，不会恢复自动重试。', 'warn', {
+        _logWeChatConservativeFetch('manual_refresh_probe', '微信好友链路：本次由手动刷新触发，已临时再试一次 GetAll，不会恢复自动重试。', 'warn', {
             module: 'friend',
             event: 'wx_friend_fetch_guard',
             result: 'manual_refresh_probe',
@@ -450,10 +505,12 @@ async function _getAllViaConservativeWeChatGetAll(options = {}) {
         }
 
         const reason = _describeFriendReply(reply, userState) === '仅自己' ? 'self_only' : 'empty';
-        _markWeChatRealtimeUnavailable(fetchState, reason);
         const cachedReply = await _getCachedFriendsReply(accountId, fetchState, {
             userState,
             allowVisitorSeed: true,
+        });
+        _markWeChatRealtimeUnavailable(fetchState, reason, {
+            hasCacheFallback: !!cachedReply,
         });
         if (cachedReply) {
             return _withWeChatConservativeMeta(cachedReply, {
@@ -469,14 +526,16 @@ async function _getAllViaConservativeWeChatGetAll(options = {}) {
             _wxRealtimeUnavailableReason: reason,
         });
     } catch (err) {
-        _markWeChatRealtimeUnavailable(fetchState, 'error');
-        if (isParamError(err)) {
-            _markGetAllParamError(fetchState, label);
-        }
         const cachedReply = await _getCachedFriendsReply(accountId, fetchState, {
             userState,
             allowVisitorSeed: true,
         });
+        _markWeChatRealtimeUnavailable(fetchState, 'error', {
+            hasCacheFallback: !!cachedReply,
+        });
+        if (isParamError(err)) {
+            _markGetAllParamError(fetchState, label);
+        }
         if (cachedReply) {
             _logWeChatConservativeFetch('error_cache', `微信好友链路：GetAll 异常(${err.message || err})，本轮回退缓存，不再追加其他接口探测。`, 'warn', {
                 module: 'friend',
@@ -519,6 +578,43 @@ function isGetAllMode() {
     return fetchState?.mode === FRIEND_FETCH_MODE.GET_ALL;
 }
 
+function getFriendFetchDiagnostics(accountId = null) {
+    const userState = getUserState();
+    const resolvedAccountId = String(
+        accountId
+        || _resolveRuntimeAccountId(userState)
+        || '',
+    ).trim();
+    const fetchState = _getFriendFetchState(_getFriendFetchKey(resolvedAccountId));
+    const now = Date.now();
+    const autoRetryAt = _getWeChatAutoRetryAt(fetchState);
+    const syncAllUnsupportedUntil = Number(fetchState && fetchState.syncAllUnsupportedUntil || 0);
+    const getAllParamErrorUntil = Number(fetchState && fetchState.getAllParamErrorUntil || 0);
+    const realtimeUnavailableReason = String(fetchState && fetchState.wechatRealtimeUnavailableReason || '').trim();
+    const failureReason = String(fetchState && fetchState.wechatRealtimeFailureReason || '').trim();
+    const failureAt = Number(fetchState && fetchState.wechatRealtimeFailureAt || 0);
+
+    return {
+        accountId: resolvedAccountId,
+        mode: String(fetchState && fetchState.mode || FRIEND_FETCH_MODE.UNKNOWN),
+        modeReason: String(fetchState && fetchState.modeReason || '').trim(),
+        modeSource: String(fetchState && fetchState.modeSource || '').trim() || 'probe',
+        lastResultKey: String(fetchState && fetchState.lastResultKey || '').trim(),
+        lastResultAt: Math.max(0, Number(fetchState && fetchState.lastResultAt || 0)),
+        wechat: {
+            conservative: true,
+            realtimeUnavailable: !!(autoRetryAt > now),
+            realtimeUnavailableReason,
+            autoRetryAt: autoRetryAt > now ? autoRetryAt : 0,
+            getAllParamErrorUntil: getAllParamErrorUntil > now ? getAllParamErrorUntil : 0,
+            syncAllUnsupportedUntil: syncAllUnsupportedUntil > now ? syncAllUnsupportedUntil : 0,
+            failureCount: Math.max(0, Number(fetchState && fetchState.wechatRealtimeFailureCount || 0)),
+            failureReason,
+            failureAt: failureAt > 0 ? failureAt : 0,
+        },
+    };
+}
+
 function resetFriendActionRuntimeState() {
     resetGetAllMode();
 }
@@ -541,6 +637,9 @@ function _getFriendFetchState(accountId) {
             syncAllUnsupportedUntil: 0,
             wechatRealtimeUnavailableUntil: 0,
             wechatRealtimeUnavailableReason: '',
+            wechatRealtimeFailureCount: 0,
+            wechatRealtimeFailureReason: '',
+            wechatRealtimeFailureAt: 0,
             sharedCacheReuseAt: 0,
             visitorSeedAt: 0,
         });
@@ -1512,4 +1611,4 @@ async function doFriendBatchOperation(friendGids = [], opType, options = {}) {
     };
 }
 
-Object.assign(module.exports, { getAllFriends, getApplications, acceptFriends, enterFriendFarm, leaveFriendFarm, updateOperationLimits, canGetExp, canGetExpByCandidates, canOperate, getRemainingTimes, getOperationLimits, helpWater, helpWeed, helpInsecticide, stealHarvest, putPlantItems, putPlantItemsDetailed, putInsects, putWeeds, putInsectsDetailed, putWeedsDetailed, checkCanOperateRemote, doFriendOperation, doFriendBatchOperation, resetGetAllMode, resetFriendActionRuntimeState, isGetAllMode });
+Object.assign(module.exports, { getAllFriends, getApplications, acceptFriends, enterFriendFarm, leaveFriendFarm, updateOperationLimits, canGetExp, canGetExpByCandidates, canOperate, getRemainingTimes, getOperationLimits, helpWater, helpWeed, helpInsecticide, stealHarvest, putPlantItems, putPlantItemsDetailed, putInsects, putWeeds, putInsectsDetailed, putWeedsDetailed, checkCanOperateRemote, doFriendOperation, doFriendBatchOperation, resetGetAllMode, resetFriendActionRuntimeState, isGetAllMode, getFriendFetchDiagnostics });
