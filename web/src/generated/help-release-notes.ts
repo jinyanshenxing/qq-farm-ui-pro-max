@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.28',
+    date: '2026-03-24',
+    title: '帮助中心数据模块入库与归档一致性修复',
+    summary: '解除 `help-center.ts` 的误忽略并正式纳入版本控制，修复 GitHub / Release / Docker / 服务器源码包使用不同帮助中心数据的问题。',
+  },
+  {
     version: 'v4.5.27',
     date: '2026-03-24',
     title: '帮助中心发布链路修复',

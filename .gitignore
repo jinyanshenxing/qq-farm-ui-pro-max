@@ -20,6 +20,7 @@ web/.dist-dev/
 
 # Runtime data
 data/
+!web/src/data/help-center.ts
 core/data
 core/data/
 
