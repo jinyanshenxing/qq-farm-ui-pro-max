@@ -24,7 +24,7 @@ const { networkCircuitBreaker } = require('../services/circuit-breaker');
 const { connect, cleanup, getWs, getUserState, networkEvents } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
 const { setLogHook, log, toNum } = require('../utils/utils');
-const { getCachedFriends, mergeFriendsCache, findReusableFriendsCache } = require('../services/database');
+const { getCachedFriends, mergeFriendsCache, findReusableFriendsCache, closeDatabase } = require('../services/database');
 const { createRuntimeEventBus } = require('../runtime/runtime-event-bus');
 const {
     createRuntimeModuleDefinitions,
@@ -760,6 +760,11 @@ async function stopBot() {
     cleanup();
     const ws = getWs();
     if (ws) ws.close();
+    try {
+        await closeDatabase();
+    } catch {
+        // ignore database shutdown failures during worker teardown
+    }
     exitWorker(0);
 }
 

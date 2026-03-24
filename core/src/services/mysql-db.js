@@ -1,5 +1,6 @@
 const { loadProjectEnv } = require('../config/load-env');
 const mysql = require('mysql2/promise');
+const process = require('node:process');
 const { createModuleLogger } = require('./logger');
 
 loadProjectEnv();
@@ -12,7 +13,12 @@ const DB_PORT = Number.parseInt(process.env.MYSQL_PORT || '4409', 10);
 const DB_USER = process.env.MYSQL_USER || 'root';
 const DB_PASS = process.env.MYSQL_PASSWORD || '123456';
 const DB_NAME = process.env.MYSQL_DATABASE || 'qq_farm_bot';
-const DB_LIMIT = Number.parseInt(process.env.MYSQL_POOL_LIMIT || '100', 10);
+const DEFAULT_DB_LIMIT = Number.parseInt(process.env.MYSQL_POOL_LIMIT || '100', 10);
+const WORKER_DB_LIMIT = Number.parseInt(process.env.MYSQL_WORKER_POOL_LIMIT || '4', 10);
+const IS_ACCOUNT_WORKER = !!String(process.env.FARM_ACCOUNT_ID || '').trim();
+const DB_LIMIT = IS_ACCOUNT_WORKER
+    ? Math.max(1, Math.min(DEFAULT_DB_LIMIT, WORKER_DB_LIMIT))
+    : DEFAULT_DB_LIMIT;
 
 if (!/^\w+$/.test(DB_NAME)) {
     throw new Error(`Invalid MYSQL_DATABASE: "${DB_NAME}". Only alphanumeric and underscore allowed.`);

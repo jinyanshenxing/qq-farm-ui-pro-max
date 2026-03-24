@@ -85,7 +85,7 @@ export interface HelpReleaseNote {
   summary: string
 }
 
-const CURRENT_HELP_VERSION = 'v4.5.28'
+const CURRENT_HELP_VERSION = 'v4.5.29'
 const CURRENT_HELP_UPDATED_AT = '2026-03-24'
 const helpMarkdownModules = import.meta.glob('../content/help-center/*.md', { import: 'default', query: '?raw' }) as Record<string, () => Promise<string>>
 const helpArticleContentCache = new Map<string, HelpArticleContent>()

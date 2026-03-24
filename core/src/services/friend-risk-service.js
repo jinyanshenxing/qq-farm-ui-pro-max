@@ -1,8 +1,26 @@
-const { getPool } = require('./mysql-db');
+const { getPool, initMysql, isMysqlInitialized } = require('./mysql-db');
 const { createModuleLogger } = require('./logger');
 
 const logger = createModuleLogger('friend-risk');
 const recentOrganicFertilizerWindows = new Map();
+let poolReadyPromise = null;
+
+async function ensurePoolReady() {
+    if (isMysqlInitialized()) {
+        return getPool();
+    }
+
+    if (!poolReadyPromise) {
+        poolReadyPromise = Promise.resolve()
+            .then(() => initMysql())
+            .finally(() => {
+                poolReadyPromise = null;
+            });
+    }
+
+    await poolReadyPromise;
+    return getPool();
+}
 
 function normalizePositiveInt(value, fallback = 0) {
     const parsed = Number.parseInt(String(value ?? fallback), 10);
@@ -148,10 +166,7 @@ function mapEventRow(row) {
 }
 
 async function recordPassiveStealEvent(options = {}) {
-    const pool = getPool();
-    if (!pool) {
-        return null;
-    }
+    const pool = await ensurePoolReady();
 
     const accountId = normalizeText(options.accountId, 64);
     const friendGid = normalizePositiveInt(options.friendGid, 0);
@@ -295,10 +310,7 @@ async function recordPassiveStealEvent(options = {}) {
 }
 
 async function listFriendRiskProfiles(accountId, options = {}) {
-    const pool = getPool();
-    if (!pool) {
-        return [];
-    }
+    const pool = await ensurePoolReady();
     const normalizedAccountId = normalizeText(accountId, 64);
     if (!normalizedAccountId) {
         return [];
@@ -329,10 +341,7 @@ async function listFriendRiskProfiles(accountId, options = {}) {
 }
 
 async function listFriendRiskEvents(accountId, options = {}) {
-    const pool = getPool();
-    if (!pool) {
-        return [];
-    }
+    const pool = await ensurePoolReady();
     const normalizedAccountId = normalizeText(accountId, 64);
     if (!normalizedAccountId) {
         return [];
@@ -357,10 +366,7 @@ async function listFriendRiskEvents(accountId, options = {}) {
 }
 
 async function resetFriendRiskProfile(accountId, friendGid) {
-    const pool = getPool();
-    if (!pool) {
-        return false;
-    }
+    const pool = await ensurePoolReady();
     const normalizedAccountId = normalizeText(accountId, 64);
     const normalizedFriendGid = normalizePositiveInt(friendGid, 0);
     if (!normalizedAccountId || !normalizedFriendGid) {
@@ -372,10 +378,7 @@ async function resetFriendRiskProfile(accountId, friendGid) {
 }
 
 async function getFriendRiskSummary(accountId) {
-    const pool = getPool();
-    if (!pool) {
-        return { total: 0, low: 0, medium: 0, high: 0, topProfiles: [] };
-    }
+    const pool = await ensurePoolReady();
     const normalizedAccountId = normalizeText(accountId, 64);
     if (!normalizedAccountId) {
         return { total: 0, low: 0, medium: 0, high: 0, topProfiles: [] };

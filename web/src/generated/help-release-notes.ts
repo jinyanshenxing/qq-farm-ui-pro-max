@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.29',
+    date: '2026-03-24',
+    title: '账号 worker 侧 MySQL 懒初始化与好友风险画像修复',
+    summary: '修复 `standalone + thread` 模式下好友风险画像写入直接报“连接池未初始化”的问题，并收口 worker 退出时的数据库清理与连接池规模。',
+  },
+  {
     version: 'v4.5.28',
     date: '2026-03-24',
     title: '帮助中心数据模块入库与归档一致性修复',
