@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.34',
+    date: '2026-03-25',
+    title: '帮助中心偏好记忆与高频回访补强',
+    summary: '快捷筛选支持 URL 同步，新增清空收藏/已读与高频阅读入口，帮助中心进一步变成可回访的操作台。',
+  },
+  {
     version: 'v4.5.33',
     date: '2026-03-25',
     title: '帮助中心快捷筛选与空状态补强',

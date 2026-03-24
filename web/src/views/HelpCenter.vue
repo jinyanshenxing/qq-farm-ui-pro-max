@@ -24,6 +24,7 @@ import { useAppStore } from '@/stores/app'
 
 type HelpAudienceFilter = 'all' | 'recommended' | 'all-users' | 'operator' | 'admin'
 type HelpQuickFilter = 'all' | 'pinned' | 'unread' | 'visited'
+type HelpUsageStats = Record<string, { openCount: number, lastOpenedAt: number }>
 
 const appStore = useAppStore()
 const route = useRoute()
@@ -35,9 +36,11 @@ const { copyText } = useCopyInteraction({
 
 const ARTICLE_QUERY_KEY = 'article'
 const AUDIENCE_QUERY_KEY = 'audience'
+const QUICK_FILTER_QUERY_KEY = 'quick'
 const SECTION_QUERY_KEY = 'section'
 const HELP_VISITED_ARTICLES_STORAGE_KEY = 'help_center_visited_articles'
 const HELP_PINNED_ARTICLES_STORAGE_KEY = 'help_center_pinned_articles'
+const HELP_USAGE_STATS_STORAGE_KEY = 'help_center_usage_stats'
 const searchQuery = ref('')
 const selectedArticleId = ref(helpArticles[0]?.id || '')
 const expandedCategory = ref(helpCategories[0]?.name || '')
@@ -51,6 +54,7 @@ const searchIndexState = ref<'idle' | 'loading' | 'ready'>('idle')
 const searchIndexedArticles = ref<Record<string, ResolvedHelpArticle>>({})
 const visitedArticleIds = ref<string[]>([])
 const pinnedArticleIds = ref<string[]>([])
+const usageStats = ref<HelpUsageStats>({})
 const articleBodyReadyTick = ref(0)
 const isSidebarSummaryExpanded = ref(false)
 const isMiniMapExpanded = ref(false)
@@ -93,6 +97,13 @@ function normalizeAudienceQuery(value: unknown): HelpAudienceFilter {
   return 'recommended'
 }
 
+function normalizeQuickFilterQuery(value: unknown): HelpQuickFilter {
+  const raw = String(Array.isArray(value) ? value[0] : value || '').trim()
+  if (['all', 'pinned', 'unread', 'visited'].includes(raw))
+    return raw as HelpQuickFilter
+  return 'all'
+}
+
 function normalizeSectionQuery(value: unknown) {
   return String(Array.isArray(value) ? value[0] : value || '').trim()
 }
@@ -119,6 +130,35 @@ function normalizePinnedArticleIds(value: unknown) {
       .map(item => String(item || '').trim())
       .filter(id => id && knownIds.has(id)),
   )]
+}
+
+function normalizeUsageStats(value: unknown): HelpUsageStats {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return {}
+
+  const knownIds = new Set(helpArticles.map(article => article.id))
+  const nextStats: HelpUsageStats = {}
+
+  for (const [rawArticleId, rawEntry] of Object.entries(value)) {
+    const articleId = String(rawArticleId || '').trim()
+    if (!articleId || !knownIds.has(articleId))
+      continue
+
+    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry))
+      continue
+
+    const openCount = Math.max(0, Math.min(9999, Math.trunc(Number((rawEntry as any).openCount) || 0)))
+    const lastOpenedAt = Math.max(0, Math.trunc(Number((rawEntry as any).lastOpenedAt) || 0))
+    if (!openCount || !lastOpenedAt)
+      continue
+
+    nextStats[articleId] = {
+      openCount,
+      lastOpenedAt,
+    }
+  }
+
+  return nextStats
 }
 
 function readVisitedArticleIds() {
@@ -162,6 +202,29 @@ function writePinnedArticleIds(articleIds: string[]) {
 
   try {
     window.localStorage.setItem(HELP_PINNED_ARTICLES_STORAGE_KEY, JSON.stringify(normalizePinnedArticleIds(articleIds)))
+  }
+  catch {
+  }
+}
+
+function readUsageStats() {
+  if (typeof window === 'undefined')
+    return {}
+
+  try {
+    return normalizeUsageStats(JSON.parse(window.localStorage.getItem(HELP_USAGE_STATS_STORAGE_KEY) || '{}'))
+  }
+  catch {
+    return {}
+  }
+}
+
+function writeUsageStats(nextStats: HelpUsageStats) {
+  if (typeof window === 'undefined')
+    return
+
+  try {
+    window.localStorage.setItem(HELP_USAGE_STATS_STORAGE_KEY, JSON.stringify(normalizeUsageStats(nextStats)))
   }
   catch {
   }
@@ -216,6 +279,25 @@ function syncAudienceFilter(filter: HelpAudienceFilter, options: { updateRoute?:
   }
 }
 
+function syncQuickFilter(filter: HelpQuickFilter, options: { updateRoute?: boolean } = {}) {
+  selectedQuickFilter.value = filter
+
+  if (options.updateRoute !== false) {
+    const rawQueryFilter = Array.isArray(route.query[QUICK_FILTER_QUERY_KEY])
+      ? route.query[QUICK_FILTER_QUERY_KEY][0]
+      : route.query[QUICK_FILTER_QUERY_KEY]
+    const normalizedFilter = filter === 'all' ? '' : filter
+    if (String(rawQueryFilter || '').trim() !== normalizedFilter) {
+      void router.replace({
+        query: {
+          ...route.query,
+          [QUICK_FILTER_QUERY_KEY]: filter === 'all' ? undefined : filter,
+        },
+      })
+    }
+  }
+}
+
 function matchesAudienceFilter(article: HelpArticle, filter: HelpAudienceFilter) {
   if (filter === 'all')
     return true
@@ -238,6 +320,12 @@ watch(() => route.query[AUDIENCE_QUERY_KEY], (nextAudience) => {
   const normalized = normalizeAudienceQuery(nextAudience)
   if (selectedAudienceFilter.value !== normalized)
     syncAudienceFilter(normalized, { updateRoute: false })
+}, { immediate: true })
+
+watch(() => route.query[QUICK_FILTER_QUERY_KEY], (nextQuickFilter) => {
+  const normalized = normalizeQuickFilterQuery(nextQuickFilter)
+  if (selectedQuickFilter.value !== normalized)
+    syncQuickFilter(normalized, { updateRoute: false })
 }, { immediate: true })
 
 watch(() => route.query[SECTION_QUERY_KEY], (nextSection) => {
@@ -289,6 +377,41 @@ function togglePinnedArticle(articleId: string = selectedArticleId.value) {
   const nextIds = normalizePinnedArticleIds([normalized, ...pinnedArticleIds.value])
   pinnedArticleIds.value = nextIds
   writePinnedArticleIds(nextIds)
+}
+
+function clearPinnedArticles() {
+  pinnedArticleIds.value = []
+  writePinnedArticleIds([])
+}
+
+function clearVisitedArticles(options: { keepCurrent?: boolean } = {}) {
+  const keepCurrent = options.keepCurrent !== false
+  const nextIds = keepCurrent && currentArticle.value ? [currentArticle.value.id] : []
+  const normalized = normalizeVisitedArticleIds(nextIds)
+  visitedArticleIds.value = normalized
+  writeVisitedArticleIds(normalized)
+}
+
+function trackArticleUsage(articleId: string) {
+  const normalized = String(articleId || '').trim()
+  if (!normalized)
+    return
+
+  const currentEntry = usageStats.value[normalized]
+  const nextStats = normalizeUsageStats({
+    ...usageStats.value,
+    [normalized]: {
+      openCount: (currentEntry?.openCount || 0) + 1,
+      lastOpenedAt: Date.now(),
+    },
+  })
+  usageStats.value = nextStats
+  writeUsageStats(nextStats)
+}
+
+function clearUsageStats() {
+  usageStats.value = {}
+  writeUsageStats({})
 }
 
 function matchesQuickFilter(article: HelpArticle, filter: HelpQuickFilter) {
@@ -458,6 +581,26 @@ const pinnedArticles = computed(() => {
     .map(articleId => visibleArticleMap.get(articleId))
     .filter((article): article is HelpArticle => !!article)
     .slice(0, 4)
+})
+
+const frequentUsageArticles = computed(() => {
+  const visibleArticleMap = new Map(audienceFilteredArticles.value.map(article => [article.id, article]))
+
+  return Object.entries(usageStats.value)
+    .map(([articleId, entry]) => ({
+      article: visibleArticleMap.get(articleId) || null,
+      openCount: entry.openCount,
+      lastOpenedAt: entry.lastOpenedAt,
+    }))
+    .filter((item): item is { article: HelpArticle, openCount: number, lastOpenedAt: number } => {
+      return !!item.article && item.article.id !== selectedArticleId.value
+    })
+    .sort((a, b) => b.openCount - a.openCount || b.lastOpenedAt - a.lastOpenedAt || a.article.title.localeCompare(b.article.title, 'zh-CN'))
+    .slice(0, 4)
+})
+
+const activeQuickFilterCount = computed(() => {
+  return activeQuickFilter.value?.count || 0
 })
 
 const categoryCards = computed(() => {
@@ -822,6 +965,29 @@ function getGovernanceCadence(article: HelpArticle | null) {
   return '30 天复核'
 }
 
+function formatUsageTime(lastOpenedAt: number) {
+  if (!lastOpenedAt)
+    return '刚刚打开'
+
+  const delta = Date.now() - lastOpenedAt
+  if (delta < 60 * 60 * 1000)
+    return '最近 1 小时内'
+  if (delta < 24 * 60 * 60 * 1000)
+    return '今天打开'
+  if (delta < 2 * 24 * 60 * 60 * 1000)
+    return '昨天打开'
+
+  try {
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+    }).format(lastOpenedAt)
+  }
+  catch {
+    return '近期打开'
+  }
+}
+
 function buildGovernanceTemplate(type: 'outdated' | 'suggestion') {
   const article = currentArticle.value
   if (!article)
@@ -905,6 +1071,7 @@ function copyCurrentArticleLink() {
     query: {
       article: article.id,
       audience: selectedAudienceFilter.value,
+      quick: selectedQuickFilter.value === 'all' ? undefined : selectedQuickFilter.value,
       section: selectedSectionId.value || undefined,
     },
   })
@@ -925,6 +1092,8 @@ function handleStorageChange(event: StorageEvent) {
     visitedArticleIds.value = readVisitedArticleIds()
   if (event.key === HELP_PINNED_ARTICLES_STORAGE_KEY)
     pinnedArticleIds.value = readPinnedArticleIds()
+  if (event.key === HELP_USAGE_STATS_STORAGE_KEY)
+    usageStats.value = readUsageStats()
 }
 
 function handleArticleBodyReady(articleId: string) {
@@ -975,6 +1144,7 @@ watch(() => currentArticle.value?.id, (articleId) => {
   }
 
   markArticleVisited(articleId)
+  trackArticleUsage(articleId)
   void ensureCurrentArticleLoaded(articleId)
 }, { immediate: true })
 
@@ -1029,6 +1199,7 @@ onMounted(() => {
     selectedArticleId.value,
   ])
   pinnedArticleIds.value = readPinnedArticleIds()
+  usageStats.value = readUsageStats()
   writeVisitedArticleIds(visitedArticleIds.value)
   window.addEventListener('storage', handleStorageChange)
   window.addEventListener('resize', updateNavOverflow)
@@ -1037,7 +1208,11 @@ onMounted(() => {
   const rawAudience = Array.isArray(route.query[AUDIENCE_QUERY_KEY])
     ? route.query[AUDIENCE_QUERY_KEY][0]
     : route.query[AUDIENCE_QUERY_KEY]
+  const rawQuickFilter = Array.isArray(route.query[QUICK_FILTER_QUERY_KEY])
+    ? route.query[QUICK_FILTER_QUERY_KEY][0]
+    : route.query[QUICK_FILTER_QUERY_KEY]
   const normalizedAudience = normalizeAudienceQuery(route.query[AUDIENCE_QUERY_KEY])
+  const normalizedQuickFilter = normalizeQuickFilterQuery(route.query[QUICK_FILTER_QUERY_KEY])
   if (normalized) {
     syncSelectedArticle(normalized, {
       clearSearch: false,
@@ -1049,6 +1224,10 @@ onMounted(() => {
     syncAudienceFilter(normalizedAudience)
   else
     syncAudienceFilter(normalizedAudience, { updateRoute: false })
+  if (String(rawQuickFilter || '').trim() && String(rawQuickFilter || '').trim() !== normalizedQuickFilter)
+    syncQuickFilter(normalizedQuickFilter)
+  else
+    syncQuickFilter(normalizedQuickFilter, { updateRoute: false })
   void syncActiveNavItemIntoView('auto')
   void syncActiveMiniMapItemIntoView('auto')
   void nextTick(() => {
@@ -1117,7 +1296,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="help-sidebar-summary-inline">
-              <span>{{ filteredArticles.length }} 篇 · {{ developmentProgress.version }} · {{ coveragePercent }}%</span>
+              <span>{{ activeQuickFilter?.label }} · {{ activeQuickFilterCount }} 篇 · {{ developmentProgress.version }} · {{ coveragePercent }}%</span>
               <span>同步 {{ developmentProgress.lastUpdated }}</span>
             </div>
 
@@ -1128,7 +1307,7 @@ onBeforeUnmount(() => {
                 type="button"
                 class="help-sidebar-quick-filter"
                 :class="{ 'help-sidebar-quick-filter--active': selectedQuickFilter === filter.value }"
-                @click="selectedQuickFilter = filter.value"
+                @click="syncQuickFilter(filter.value)"
               >
                 <span>{{ filter.label }}</span>
                 <span class="help-sidebar-quick-filter__count">{{ filter.count }}</span>
@@ -1148,6 +1327,14 @@ onBeforeUnmount(() => {
               <div class="help-nav-status__meta">
                 <span class="help-nav-status__eyebrow">当前分类</span>
                 <div class="help-nav-status__actions">
+                  <button
+                    v-if="selectedQuickFilter === 'visited' || visitedArticleIds.length > 1"
+                    type="button"
+                    class="help-nav-status__action"
+                    @click="clearVisitedArticles()"
+                  >
+                    重置已读
+                  </button>
                   <button
                     v-if="currentArticle"
                     type="button"
@@ -1249,7 +1436,17 @@ onBeforeUnmount(() => {
               <div v-if="currentArticle || pinnedArticles.length" class="help-nav-pins">
                 <div class="help-nav-pins__header">
                   <span class="help-nav-pins__eyebrow">收藏置顶</span>
-                  <span class="help-nav-pins__count">{{ pinnedArticles.length }} 篇</span>
+                  <div class="help-nav-pins__tools">
+                    <span class="help-nav-pins__count">{{ pinnedArticles.length }} 篇</span>
+                    <button
+                      v-if="pinnedArticles.length"
+                      type="button"
+                      class="help-nav-strip__action"
+                      @click="clearPinnedArticles"
+                    >
+                      清空
+                    </button>
+                  </div>
                 </div>
 
                 <p v-if="!pinnedArticles.length" class="help-nav-pins__empty">
@@ -1274,7 +1471,16 @@ onBeforeUnmount(() => {
               <div v-if="recentHistoryArticles.length > 1" class="help-nav-history">
                 <div class="help-nav-history__header">
                   <span class="help-nav-history__eyebrow">最近阅读</span>
-                  <span class="help-nav-history__count">{{ recentHistoryArticles.length }} 篇</span>
+                  <div class="help-nav-history__tools">
+                    <span class="help-nav-history__count">{{ recentHistoryArticles.length }} 篇</span>
+                    <button
+                      type="button"
+                      class="help-nav-strip__action"
+                      @click="clearVisitedArticles()"
+                    >
+                      重置
+                    </button>
+                  </div>
                 </div>
 
                 <div class="help-nav-history__track">
@@ -1383,6 +1589,40 @@ onBeforeUnmount(() => {
                 <p class="help-nav-empty__copy">
                   可以切回“{{ activeQuickFilter?.value === 'pinned' ? '全部' : '收藏 / 全部' }}”或继续浏览其他阅读视角。
                 </p>
+                <div class="help-nav-empty__actions">
+                  <button
+                    v-if="selectedQuickFilter !== 'all'"
+                    type="button"
+                    class="help-nav-empty__action help-nav-empty__action--primary"
+                    @click="syncQuickFilter('all')"
+                  >
+                    查看全部
+                  </button>
+                  <button
+                    v-if="selectedQuickFilter === 'pinned' && currentArticle && !hasPinnedArticle(currentArticle.id)"
+                    type="button"
+                    class="help-nav-empty__action"
+                    @click="togglePinnedArticle(currentArticle.id)"
+                  >
+                    收藏当前
+                  </button>
+                  <button
+                    v-if="selectedQuickFilter === 'visited' && visitedArticleIds.length > 1"
+                    type="button"
+                    class="help-nav-empty__action"
+                    @click="clearVisitedArticles()"
+                  >
+                    重置已读
+                  </button>
+                  <button
+                    v-if="selectedQuickFilter === 'unread' && quickFilters.find(item => item.value === 'visited')?.count"
+                    type="button"
+                    class="help-nav-empty__action"
+                    @click="syncQuickFilter('visited')"
+                  >
+                    查看已读
+                  </button>
+                </div>
               </div>
 
               <div v-if="navOverflowBottom" class="help-nav-fade help-nav-fade--bottom" />
@@ -1757,7 +1997,7 @@ onBeforeUnmount(() => {
               <div
                 v-if="currentArticle"
                 class="help-article-support-grid"
-                :class="{ 'help-article-support-grid--single': !featuredRecommendations.length }"
+                :class="{ 'help-article-support-grid--single': !featuredRecommendations.length && !frequentUsageArticles.length }"
               >
                 <button type="button" class="help-sync-card help-sync-card--article" @click="openReleaseHighlights">
                   <div class="help-sync-card__header">
@@ -1782,6 +2022,44 @@ onBeforeUnmount(() => {
                     </span>
                   </div>
                 </button>
+
+                <section v-if="frequentUsageArticles.length" class="help-must-read-card help-must-read-card--article help-usage-card">
+                  <div class="help-must-read-card__header">
+                    <span>高频阅读</span>
+                    <div class="help-usage-card__tools">
+                      <span class="help-sidebar-meta-pill">{{ frequentUsageArticles.length }} 篇</span>
+                      <button type="button" class="help-usage-card__action" @click="clearUsageStats">
+                        重置偏好
+                      </button>
+                    </div>
+                  </div>
+                  <p class="help-must-read-card__copy">
+                    根据本地阅读次数和最近打开时间自动整理，方便快速回到最常用的帮助入口。
+                  </p>
+                  <div class="help-usage-list">
+                    <button
+                      v-for="item in frequentUsageArticles"
+                      :key="`usage-${item.article.id}`"
+                      type="button"
+                      class="help-usage-item"
+                      @click="syncSelectedArticle(item.article.id)"
+                    >
+                      <div class="help-usage-item__meta">
+                        <BaseBadge surface="meta" tone="brand" class="rounded-full px-2 py-0.5 text-[10px] font-bold">
+                          {{ item.article.category }}
+                        </BaseBadge>
+                        <span class="help-usage-item__count">{{ item.openCount }} 次打开</span>
+                        <span class="help-usage-item__time">{{ formatUsageTime(item.lastOpenedAt) }}</span>
+                      </div>
+                      <div class="help-usage-item__title">
+                        {{ item.article.title }}
+                      </div>
+                      <p class="help-usage-item__copy">
+                        {{ item.article.summary }}
+                      </p>
+                    </button>
+                  </div>
+                </section>
 
                 <section v-if="featuredRecommendations.length" class="help-must-read-card help-must-read-card--article">
                   <div class="help-must-read-card__header">
@@ -2863,6 +3141,13 @@ onBeforeUnmount(() => {
   gap: 0.5rem;
 }
 
+.help-nav-pins__tools,
+.help-nav-history__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+}
+
 .help-nav-pins__eyebrow {
   color: var(--ui-text-2);
   font-size: 0.63rem;
@@ -2879,6 +3164,28 @@ onBeforeUnmount(() => {
 .help-nav-pins__count {
   font-size: 0.68rem;
   font-weight: 800;
+}
+
+.help-nav-strip__action {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--ui-border-subtle) 92%, transparent);
+  border-radius: 999px;
+  padding: 0.14rem 0.48rem;
+  background: color-mix(in srgb, var(--ui-bg-surface) 90%, transparent);
+  color: var(--ui-text-2);
+  font-size: 0.63rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    border-color var(--ui-motion-fast) ease,
+    background-color var(--ui-motion-fast) ease,
+    color var(--ui-motion-fast) ease;
+}
+
+.help-nav-strip__action:hover {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 30%, var(--ui-border-subtle) 70%);
+  background: color-mix(in srgb, var(--ui-brand-soft-12) 72%, var(--ui-bg-surface) 28%);
+  color: var(--ui-text-1);
 }
 
 .help-nav-pins__empty {
@@ -3071,6 +3378,43 @@ onBeforeUnmount(() => {
   color: var(--ui-text-2);
   font-size: 0.78rem;
   line-height: 1.55;
+}
+
+.help-nav-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.95rem;
+}
+
+.help-nav-empty__action {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--ui-border-subtle) 92%, transparent);
+  border-radius: 999px;
+  min-height: 2rem;
+  padding: 0.34rem 0.78rem;
+  background: color-mix(in srgb, var(--ui-bg-surface) 92%, transparent);
+  color: var(--ui-text-1);
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform var(--ui-motion-fast) ease,
+    border-color var(--ui-motion-fast) ease,
+    background-color var(--ui-motion-fast) ease,
+    color var(--ui-motion-fast) ease;
+}
+
+.help-nav-empty__action:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--ui-brand-500) 28%, var(--ui-border-subtle) 72%);
+  background: color-mix(in srgb, var(--ui-brand-soft-12) 72%, var(--ui-bg-surface) 28%);
+}
+
+.help-nav-empty__action--primary {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 32%, var(--ui-border-subtle) 68%);
+  background: color-mix(in srgb, var(--ui-brand-soft-12) 78%, var(--ui-bg-surface) 22%);
 }
 
 .help-nav::-webkit-scrollbar {
@@ -3695,10 +4039,15 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.help-article-lower-grid,
-.help-article-support-grid {
+.help-article-lower-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.help-article-support-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
   gap: 1rem;
 }
 
@@ -3881,6 +4230,99 @@ onBeforeUnmount(() => {
   color: var(--ui-text-2);
   font-size: 0.8rem;
   font-weight: 700;
+}
+
+.help-usage-card__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.help-usage-card__action {
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--ui-border-subtle) 92%, transparent);
+  border-radius: 999px;
+  padding: 0.22rem 0.6rem;
+  background: color-mix(in srgb, var(--ui-bg-surface) 90%, transparent);
+  color: var(--ui-text-2);
+  font-size: 0.68rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    border-color var(--ui-motion-fast) ease,
+    background-color var(--ui-motion-fast) ease,
+    color var(--ui-motion-fast) ease,
+    transform var(--ui-motion-fast) ease;
+}
+
+.help-usage-card__action:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--ui-brand-500) 30%, var(--ui-border-subtle) 70%);
+  background: color-mix(in srgb, var(--ui-brand-soft-12) 72%, var(--ui-bg-surface) 28%);
+  color: var(--ui-text-1);
+}
+
+.help-usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.help-usage-item {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.34rem;
+  border: 1px solid transparent;
+  border-radius: 0.95rem;
+  padding: 0.78rem 0.82rem;
+  background: color-mix(in srgb, var(--ui-bg-surface-raised) 88%, transparent);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform var(--ui-motion-fast) ease,
+    border-color var(--ui-motion-fast) ease,
+    background-color var(--ui-motion-fast) ease;
+}
+
+.help-usage-item:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--ui-brand-500) 24%, var(--ui-border-subtle) 76%);
+  background: color-mix(in srgb, var(--ui-brand-soft-12) 68%, transparent);
+}
+
+.help-usage-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--ui-text-2);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.help-usage-item__count,
+.help-usage-item__time {
+  color: var(--ui-text-2);
+}
+
+.help-usage-item__title {
+  color: var(--ui-text-1);
+  font-size: 0.87rem;
+  font-weight: 800;
+  line-height: 1.42;
+}
+
+.help-usage-item__copy {
+  margin: 0;
+  color: var(--ui-text-2);
+  font-size: 0.75rem;
+  line-height: 1.52;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .help-article-footer {

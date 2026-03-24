@@ -29,7 +29,7 @@ async function mockAppApis(page: Parameters<typeof test.beforeEach>[0]['page']) 
     if (path.startsWith('/api/view-preferences'))
       return route.fulfill(ok({ ok: true, data: { appSeenVersion: 'v4.5.25', announcementDismissedId: 'dismissed' } }))
 
-    if (path === '/api/accounts')
+    if (path === '/api/accounts') {
       return route.fulfill(ok({
         ok: true,
         data: {
@@ -46,6 +46,7 @@ async function mockAppApis(page: Parameters<typeof test.beforeEach>[0]['page']) 
           ],
         },
       }))
+    }
 
     if (path === '/api/account-selection')
       return route.fulfill(ok({ ok: true }))
@@ -373,7 +374,7 @@ test('navigates between settings anchors and contextual help anchors', async ({ 
   await expect(contextHelpEntry).toBeVisible()
 
   await contextHelpEntry.click()
-  await expect(page).toHaveURL(new RegExp(`article=system-update-center`))
+  await expect(page).toHaveURL(/article=system-update-center/)
   await expect.poll(() => decodeURIComponent(page.url())).toContain(`section=${helpSectionId('任务执行')}`)
   await expect(page.locator('.help-outline-item--active')).toContainText('任务执行')
 
@@ -382,4 +383,53 @@ test('navigates between settings anchors and contextual help anchors', async ({ 
   await expect.poll(() => page.url()).toContain('advancedSection=update')
   await expect.poll(() => page.url()).toContain('updateTab=jobs')
   await expect.poll(() => page.url()).toContain('#settings-update-jobs')
+})
+
+test('persists quick filters and supports clearing favorites and reading history', async ({ page }) => {
+  await page.goto('/help?article=quick-start&audience=all', { waitUntil: 'domcontentloaded' })
+  await dismissBlockingDialogs(page)
+
+  await expect(page.locator('.help-hero__title')).toHaveText('快速上手')
+  await page.locator('.help-nav [data-help-article-id="workspace-overview"]').click()
+  await expect(page.locator('.help-hero__title')).toHaveText('面板与页面导航')
+
+  await page.locator('.help-sidebar-quick-filters').getByRole('button', { name: /^已读/ }).click()
+  await expect(page).toHaveURL(/quick=visited/)
+  await page.locator('.help-nav-status__actions').getByRole('button', { name: '重置已读' }).click()
+  await expect(page.locator('.help-nav-history')).toBeHidden()
+  await expect(page.locator('.help-nav-group__count--progress').first()).toContainText('1/')
+
+  await page.locator('.help-sidebar-quick-filters').getByRole('button', { name: /^收藏/ }).click()
+  await expect(page).toHaveURL(/quick=pinned/)
+  await expect(page.locator('.help-nav-empty')).toBeVisible()
+
+  await page.locator('.help-nav-empty__actions').getByRole('button', { name: '收藏当前' }).click()
+  await expect(page.locator('.help-nav-pins')).toBeVisible()
+  await expect(page.locator('.help-nav-item--active')).toContainText('面板与页面导航')
+
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await dismissBlockingDialogs(page)
+  await expect(page).toHaveURL(/quick=pinned/)
+  await expect(page.locator('.help-nav-pins')).toBeVisible()
+
+  await page.locator('.help-nav-pins').getByRole('button', { name: '清空' }).click()
+  await expect(page.locator('.help-nav-empty')).toBeVisible()
+
+  await page.locator('.help-nav-empty__actions').getByRole('button', { name: '查看全部' }).click()
+  await expect(page).not.toHaveURL(/quick=/)
+  await expect(page.locator('.help-nav-item--active')).toContainText('面板与页面导航')
+})
+
+test('surfaces frequent article shortcuts and allows resetting usage preferences', async ({ page }) => {
+  await page.goto('/help?article=quick-start&audience=all', { waitUntil: 'domcontentloaded' })
+  await dismissBlockingDialogs(page)
+
+  await expect(page.locator('.help-usage-card')).toBeHidden()
+  await page.locator('.help-nav [data-help-article-id="workspace-overview"]').click()
+
+  await expect(page.locator('.help-usage-card')).toBeVisible()
+  await expect(page.locator('.help-usage-item').first()).toContainText('快速上手')
+
+  await page.locator('.help-usage-card__action').evaluate((element: HTMLButtonElement) => element.click())
+  await expect(page.locator('.help-usage-card')).toBeHidden()
 })
