@@ -104,6 +104,7 @@ function buildDrainCutoverReadiness({ accounts, clusterNodes, targetNodeIds } = 
     let runningAccountCount = 0;
     let targetedRunningAccountCount = 0;
     let reloginRequiredCount = 0;
+    const affectedAccounts = [];
     const blockers = [];
 
     list.forEach((account) => {
@@ -115,6 +116,16 @@ function buildDrainCutoverReadiness({ accounts, clusterNodes, targetNodeIds } = 
         if (running) runningAccountCount += 1;
         if (running && targeted) targetedRunningAccountCount += 1;
         if (!running || !targeted) return;
+
+        const affectedRecord = {
+            accountId,
+            accountName: String(account && (account.name || account.nick || account.uin || account.id) || '').trim() || accountId,
+            platform: String(account && account.platform || '').trim(),
+            nodeId,
+            credentialKind: normalizeCredentialKind(account),
+            needsReloginAfterStop: normalizeCredentialKind(account) !== 'auth_ticket',
+        };
+        affectedAccounts.push(affectedRecord);
 
         const cutover = evaluateAccountCutover(account);
         if (cutover.cutoverEligible) return;
@@ -133,6 +144,26 @@ function buildDrainCutoverReadiness({ accounts, clusterNodes, targetNodeIds } = 
         });
     });
 
+    const reloginRequiredAccounts = affectedAccounts.filter(item => item.needsReloginAfterStop);
+    const blockingNodes = Array.from(new Set(blockers.map(item => item.nodeId).filter(Boolean))).map((nodeId) => {
+        const nodeBlockers = blockers.filter(item => item.nodeId === nodeId);
+        return {
+            nodeId,
+            blockerCount: nodeBlockers.length,
+            affectedAccounts: nodeBlockers.map(item => ({
+                accountId: item.accountId,
+                accountName: item.accountName,
+                platform: item.platform,
+                reasonCode: item.reasonCode,
+                needsReloginAfterStop: item.needsReloginAfterStop,
+            })),
+        };
+    });
+    const forcedStopCandidates = affectedAccounts.filter((item) => !blockers.find(blocker => blocker.accountId === item.accountId));
+    const estimatedDrainSeconds = targetedRunningAccountCount > 0
+        ? Math.max(30, targetedRunningAccountCount * 45)
+        : 0;
+
     return {
         checkedAt: Date.now(),
         canDrainCutover: blockers.length === 0,
@@ -141,6 +172,11 @@ function buildDrainCutoverReadiness({ accounts, clusterNodes, targetNodeIds } = 
         targetedRunningAccountCount,
         blockerCount: blockers.length,
         reloginRequiredCount,
+        affectedAccounts,
+        blockingNodes,
+        estimatedDrainSeconds,
+        reloginRequiredAccounts,
+        forcedStopCandidates,
         blockers,
     };
 }

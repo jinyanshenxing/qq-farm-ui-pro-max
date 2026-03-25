@@ -560,7 +560,7 @@ test('notifications route respects limit parameter', async () => {
     const { app, routes } = createFakeApp();
     registerNotificationsRoute({
         app,
-        parseUpdateLog: () => [
+        getNotificationEntries: async () => [
             { title: 'A' },
             { title: 'B' },
         ],

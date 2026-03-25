@@ -28,7 +28,10 @@ backup
 *.local
 npm-debug.log*
 pnpm-debug.log*
-/logs
+/logs/*
+!/logs/development/
+/logs/development/*
+!/logs/development/Update.log
 
 # OS
 .DS_Store
@@ -48,4 +51,3 @@ tmp
 .specstory
 .agent
 .cursor
-

@@ -73,7 +73,12 @@ http://your-domain.com/api
 X-Admin-Token: your-token-here
 ```
 
-### 获取 Token
+当前版本同时支持两种管理端认证方式：
+
+- 浏览器 / `curl` 推荐直接调用 `POST /api/login` 建立 Cookie 会话
+- 如果你已经拿到了有效的 access token，也可以继续通过 `X-Admin-Token` 访问接口
+
+### 建立登录会话
 
 **接口:** `POST /login`
 
@@ -90,15 +95,23 @@ X-Admin-Token: your-token-here
 {
   "ok": true,
   "data": {
-    "token": "abc123...",
     "user": {
       "username": "admin",
       "role": "admin",
       "card": null
+    },
+    "session": {
+      "authenticated": true
     }
   }
 }
 ```
+
+说明：
+
+- 当前实现会通过 `Set-Cookie` 写入 `access_token` / `refresh_token`
+- `POST /login` 不再默认直接返回可复制的 token 字段
+- 命令行场景如果不方便复用 Cookie，会话型脚本更推荐直接用 `curl -c/-b`，或者使用仓库里的 `scripts/deploy/smoke-system-update-center.sh`
 
 ### 账号所有权验证
 

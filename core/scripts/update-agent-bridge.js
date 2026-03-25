@@ -3,14 +3,18 @@
 process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'error';
 process.env.FARM_FALLBACK_CONSOLE_LEVEL = process.env.FARM_FALLBACK_CONSOLE_LEVEL || 'silent';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { version } = require('../package.json');
 const { initMysql, closeMysql } = require('../src/services/mysql-db');
 const {
     getSystemUpdateRuntime,
 } = require('../src/services/system-update-config');
 const {
+    appendUpdateJobLog,
     claimNextUpdateJob,
     getUpdateJobById,
+    normalizeExecutionPhase,
     updateUpdateJob,
 } = require('../src/services/system-update-jobs');
 const {
@@ -18,6 +22,7 @@ const {
     saveActiveJobRuntime,
     saveClusterNodeDrainState,
 } = require('../src/services/system-update-runtime');
+const { createAnnouncementRuntime } = require('../src/services/announcement-materializer');
 
 function parseArgs(argv = []) {
     const args = {
@@ -91,6 +96,9 @@ function printClaim(job, format) {
     }
 
     if (format === 'tsv') {
+        const optionFlags = job && job.payload && job.payload.options && typeof job.payload.options === 'object'
+            ? job.payload.options
+            : {};
         const fields = [
             'JOB',
             String(job.id || ''),
@@ -98,9 +106,16 @@ function printClaim(job, format) {
             String(job.scope || ''),
             String(job.strategy || ''),
             String(job.targetVersion || ''),
+            String(job.sourceVersion || ''),
             job.preserveCurrent ? '1' : '0',
             job.requireDrain ? '1' : '0',
             Array.isArray(job.drainNodeIds) ? job.drainNodeIds.join(',') : '',
+            String(job.kind || ''),
+            String(job.executionPhase || ''),
+            optionFlags.syncAnnouncements ? '1' : '0',
+            optionFlags.runVerification === false ? '0' : '1',
+            optionFlags.allowAutoRollback ? '1' : '0',
+            optionFlags.includeDeployTemplates ? '1' : '0',
         ];
         process.stdout.write(`${fields.join('\t')}\n`);
         return;
@@ -125,6 +140,7 @@ function printJob(job, format) {
             String(job.id || ''),
             String(job.jobKey || ''),
             String(job.status || ''),
+            String(job.executionPhase || ''),
             String(job.claimAgentId || ''),
             String(job.startedAt || 0),
             String(job.finishedAt || 0),
@@ -225,15 +241,30 @@ async function handleSetJobStatus(args) {
         throw new Error('status is required');
     }
 
+    const executionPhase = normalizeExecutionPhase(args.phase || args['execution-phase'] || '', '');
     const now = Date.now();
+    const resultPayload = parseJson(args['result-json'] || args.resultJson || '', null);
+    const verificationPayload = parseJson(args['verification-json'] || args.verificationJson || '', null);
+    const rollbackPayload = parseJson(args['rollback-payload-json'] || args.rollbackPayloadJson || '', null);
+    const preflightPayload = parseJson(args['preflight-json'] || args.preflightJson || '', null);
+    const failureCategory = String(args['failure-category'] || args.failureCategory || '').trim();
+    if (resultPayload && failureCategory && !resultPayload.failureCategory) {
+        resultPayload.failureCategory = failureCategory;
+    }
     const patch = {
         status,
         claimAgentId: agentId,
         progressPercent: args.progress || args['progress-percent'],
         summaryMessage: args.summary || '',
         errorMessage: args.error || '',
-        result: parseJson(args['result-json'] || args.resultJson || '', null),
+        result: resultPayload,
+        verification: verificationPayload,
+        rollbackPayload,
+        preflight: preflightPayload,
     };
+    if (executionPhase) {
+        patch.executionPhase = executionPhase;
+    }
     if (status === 'running') {
         patch.startedAt = now;
     }
@@ -247,6 +278,22 @@ async function handleSetJobStatus(args) {
     const job = await updateUpdateJob(jobId, patch);
     if (!job) {
         throw new Error(`job not found: ${jobId}`);
+    }
+
+    const logMessage = String(args['log-message'] || args.logMessage || patch.summaryMessage || '').trim();
+    if (logMessage) {
+        await appendUpdateJobLog({
+            jobId: job.id,
+            phase: executionPhase || patch.executionPhase || job.executionPhase || 'queued',
+            level: args['log-level'] || args.logLevel || (status === 'failed' ? 'error' : 'info'),
+            message: logMessage,
+            payload: parseJson(args['log-payload-json'] || args.logPayloadJson || '', null)
+                || resultPayload
+                || verificationPayload
+                || rollbackPayload
+                || preflightPayload
+                || null,
+        });
     }
 
     await saveActiveJobRuntime(
@@ -267,6 +314,23 @@ async function handleSetJobStatus(args) {
     }
 
     printJson({ ok: true, job });
+}
+
+async function handleSyncAnnouncements(args) {
+    const projectRoot = path.resolve(__dirname, '../..');
+    const runtime = createAnnouncementRuntime({
+        fsRef: fs,
+        pathRef: path,
+        projectRoot,
+    });
+    const result = await runtime.materializeAnnouncements({
+        createdBy: String(args['created-by'] || args.createdBy || 'update_agent').trim() || 'update_agent',
+        sourceTypes: normalizeNodeIdList(args['source-types'] || args.sourceTypes || ''),
+        limit: args.limit,
+        dryRun: parseBoolean(args['dry-run'] || args.dryRun, false),
+        markInstalled: args['mark-installed'] || args.markInstalled || '',
+    });
+    printJson({ ok: true, result });
 }
 
 async function handleSetNodeDrain(args) {
@@ -314,6 +378,9 @@ async function main() {
                 break;
             case 'get-runtime':
                 await handleGetRuntime(args);
+                break;
+            case 'sync-announcements':
+                await handleSyncAnnouncements(args);
                 break;
             case 'get-job': {
                 const job = await getUpdateJobById(args['job-id'] || args.jobId || args._[1] || '');

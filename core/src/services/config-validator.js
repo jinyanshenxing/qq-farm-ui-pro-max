@@ -114,7 +114,7 @@ class ConfigValidator {
     /**
      * 校验配置对象
      * @param {object} config - 待校验的配置
-     * @returns {{ valid: boolean, errors: string[], coerced: object }}
+     * @returns {{ valid: boolean, errors: string[], coerced: object }} 校验结果与自动类型矫正后的输出。
      */
     validate(config) {
         const errors = [];
@@ -474,6 +474,16 @@ const BUG_REPORT_CONFIG_SCHEMA = {
     allowNonAdminSubmit: { type: 'boolean', default: true, label: '允许普通用户提交' },
 };
 
+const HELP_CENTER_OBSERVABILITY_CONFIG_SCHEMA = {
+    telemetryEnabled: { type: 'boolean', default: false, label: '帮助中心埋点开关' },
+    feedbackEnabled: { type: 'boolean', default: false, label: '帮助中心反馈开关' },
+    jumpTracingEnabled: { type: 'boolean', default: false, label: '帮助中心跳转链路采集' },
+    telemetrySamplingRate: { type: 'number', min: 0, max: 1, default: 0, label: '帮助中心埋点采样率' },
+    batchSize: { type: 'integer', min: 1, max: 50, default: 20, label: '帮助中心埋点批量上报条数' },
+    flushIntervalMs: { type: 'integer', min: 1000, max: 60000, default: 15000, label: '帮助中心埋点刷新间隔(ms)' },
+    retentionDays: { type: 'integer', min: 7, max: 365, default: 90, label: '帮助中心埋点保留天数' },
+};
+
 const SETTINGS_SCHEMA = {
     accountMode: {
         type: 'string',
@@ -641,7 +651,7 @@ const SETTINGS_SCHEMA = {
 /**
  * 校验设置保存请求
  * @param {object} settings - 前端提交的设置
- * @returns {{ valid: boolean, errors: string[], coerced: object }}
+ * @returns {{ valid: boolean, errors: string[], coerced: object }} 校验结果与自动矫正后的配置对象。
  */
 function validateSettings(settings) {
     const input = (settings && typeof settings === 'object') ? { ...settings } : {};
@@ -683,10 +693,35 @@ function validateBugReportConfig(config) {
     return result;
 }
 
+/**
+ * 校验帮助中心可观测性配置。
+ * @param {object} config - 前端提交的帮助中心可观测性配置。
+ * @returns {{ valid: boolean, errors: string[], coerced: object }} 校验结果与归一化后的配置对象。
+ */
+function validateHelpCenterObservabilityConfig(config) {
+    const validator = new ConfigValidator(HELP_CENTER_OBSERVABILITY_CONFIG_SCHEMA, { coerce: true });
+    const result = validator.validate(config && typeof config === 'object' ? config : {});
+    const next = result.coerced || {};
+    const rate = Number(next.telemetrySamplingRate);
+
+    next.telemetrySamplingRate = Number.isFinite(rate)
+        ? Math.min(1, Math.max(0, rate))
+        : 0;
+
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+        result.valid = false;
+        result.errors.push('帮助中心埋点采样率必须在 0 到 1 之间');
+    }
+
+    result.coerced = next;
+    return result;
+}
+
 module.exports = {
     ConfigValidator,
     validateSettings,
     validateBugReportConfig,
+    validateHelpCenterObservabilityConfig,
     SETTINGS_SCHEMA,
     AUTOMATION_SCHEMA,
     INTERVALS_SCHEMA,
@@ -698,4 +733,5 @@ module.exports = {
     PROXY_BINDING_CONFIG_SCHEMA,
     WORKFLOW_CONFIG_SCHEMA,
     BUG_REPORT_CONFIG_SCHEMA,
+    HELP_CENTER_OBSERVABILITY_CONFIG_SCHEMA,
 };

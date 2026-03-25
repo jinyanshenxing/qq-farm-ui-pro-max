@@ -16,7 +16,31 @@ const UPDATE_JOB_STATUS = Object.freeze({
 
 const UPDATE_SCOPE_OPTIONS = new Set(['app', 'worker', 'cluster']);
 const UPDATE_STRATEGY_OPTIONS = new Set(['in_place', 'rolling', 'parallel_new_dir', 'drain_and_cutover']);
-const UPDATE_KIND_OPTIONS = new Set(['app_update', 'worker_update', 'cluster_update']);
+const UPDATE_KIND_OPTIONS = new Set(['app_update', 'worker_update', 'cluster_update', 'rollback_update']);
+const UPDATE_EXECUTION_PHASE_OPTIONS = new Set([
+    'queued',
+    'preflight',
+    'backup',
+    'pull_image',
+    'stop_stack',
+    'apply_update',
+    'start_stack',
+    'verify',
+    'sync_announcements',
+    'rollback',
+    'done',
+]);
+const UPDATE_FAILURE_CATEGORY_OPTIONS = new Set([
+    'preflight_blocked',
+    'drain_timeout',
+    'pull_failed',
+    'verification_failed',
+    'rollback_failed',
+    'manual_cancelled',
+    'script_error',
+    'health_check_failed',
+]);
+const UPDATE_JOB_LOG_LEVEL_OPTIONS = new Set(['debug', 'info', 'warn', 'error']);
 
 function normalizeBatchKey(batchKey) {
     return String(batchKey || '').trim().slice(0, 64);
@@ -46,13 +70,45 @@ function normalizeKind(kind, fallback = 'app_update') {
     return UPDATE_KIND_OPTIONS.has(value) ? value : fallback;
 }
 
+function normalizeExecutionPhase(value, fallback = 'queued') {
+    const text = String(value || '').trim().toLowerCase();
+    return UPDATE_EXECUTION_PHASE_OPTIONS.has(text) ? text : fallback;
+}
+
+function normalizeFailureCategory(value, fallback = '') {
+    const text = String(value || '').trim().toLowerCase();
+    return UPDATE_FAILURE_CATEGORY_OPTIONS.has(text) ? text : fallback;
+}
+
+function normalizeJobLogLevel(value, fallback = 'info') {
+    const text = String(value || '').trim().toLowerCase();
+    return UPDATE_JOB_LOG_LEVEL_OPTIONS.has(text) ? text : fallback;
+}
+
 function normalizeNodeIdList(input) {
     if (!Array.isArray(input)) return [];
     return Array.from(new Set(input.map(item => String(item || '').trim()).filter(Boolean)));
 }
 
+function normalizeObject(value) {
+    return value && typeof value === 'object' ? value : null;
+}
+
 function buildJobKey() {
     return `upd_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function buildResultSignature(input = {}) {
+    const payload = JSON.stringify({
+        status: normalizeJobStatus(input.status, ''),
+        executionPhase: normalizeExecutionPhase(input.executionPhase, ''),
+        summaryMessage: String(input.summaryMessage || '').trim(),
+        errorMessage: String(input.errorMessage || '').trim(),
+        result: normalizeObject(input.result),
+        verification: normalizeObject(input.verification),
+        rollbackPayload: normalizeObject(input.rollbackPayload),
+    });
+    return crypto.createHash('sha1').update(payload).digest('hex');
 }
 
 function mapJobRow(row) {
@@ -78,6 +134,11 @@ function mapJobRow(row) {
         summaryMessage: String(row.summary_message || '').trim(),
         payload: parseJsonSafely(row.payload_json, null),
         result: parseJsonSafely(row.result_json, null),
+        preflight: parseJsonSafely(row.preflight_json, null),
+        rollbackPayload: parseJsonSafely(row.rollback_payload_json, null),
+        verification: parseJsonSafely(row.verification_json, null),
+        resultSignature: String(row.result_signature || '').trim(),
+        executionPhase: normalizeExecutionPhase(row.execution_phase),
         errorMessage: String(row.error_message || '').trim(),
         claimedAt: toTimestamp(row.claimed_at),
         startedAt: toTimestamp(row.started_at),
@@ -87,13 +148,84 @@ function mapJobRow(row) {
     };
 }
 
+function mapJobLogRow(row) {
+    if (!row) return null;
+    return {
+        id: Number(row.id) || 0,
+        jobId: Number(row.job_id) || 0,
+        phase: normalizeExecutionPhase(row.phase),
+        level: normalizeJobLogLevel(row.level),
+        message: String(row.message || '').trim(),
+        payload: parseJsonSafely(row.payload_json, null),
+        createdAt: toTimestamp(row.created_at),
+    };
+}
+
+function buildBatchNodeMap(items = []) {
+    const perNodePhase = {};
+    const perNodeErrorSummary = {};
+    const perNodeFailureCategory = {};
+    const failedCategories = {};
+    let runningNodeCount = 0;
+    let blockedNodeCount = 0;
+    let failedNodeCount = 0;
+
+    for (const item of items) {
+        const managedNodeIds = normalizeNodeIdList(
+            parseJsonSafely(item && item.payload && item.payload.options && item.payload.options.managedNodeIds, []),
+        );
+        const targetNodes = managedNodeIds.length > 0
+            ? managedNodeIds
+            : normalizeNodeIdList(item && item.drainNodeIds);
+        const failureCategory = normalizeFailureCategory(
+            item && item.result && item.result.failureCategory,
+            '',
+        );
+        if (failureCategory) {
+            failedCategories[failureCategory] = (failedCategories[failureCategory] || 0) + 1;
+        }
+        for (const nodeId of targetNodes) {
+            perNodePhase[nodeId] = item.executionPhase || item.status || 'queued';
+            if (item.errorMessage) {
+                perNodeErrorSummary[nodeId] = item.errorMessage;
+            }
+            if (failureCategory) {
+                perNodeFailureCategory[nodeId] = failureCategory;
+            }
+        }
+    }
+
+    Object.entries(perNodePhase).forEach(([nodeId, phase]) => {
+        const normalizedPhase = String(phase || '').trim();
+        const failureCategory = String(perNodeFailureCategory[nodeId] || '').trim();
+        if (['preflight'].includes(normalizedPhase) || failureCategory === 'preflight_blocked') {
+            blockedNodeCount += 1;
+        } else if (['backup', 'pull_image', 'stop_stack', 'apply_update', 'start_stack', 'verify', 'sync_announcements', 'rollback'].includes(normalizedPhase)) {
+            runningNodeCount += 1;
+        }
+        if (perNodeErrorSummary[nodeId]) {
+            failedNodeCount += 1;
+        }
+    });
+
+    return {
+        runningNodeCount,
+        blockedNodeCount,
+        failedNodeCount,
+        perNodePhase,
+        perNodeErrorSummary,
+        failedCategories,
+    };
+}
+
 async function listUpdateJobs(options = {}) {
     const pool = getPool();
-    const limit = Math.max(1, Math.min(100, Number.parseInt(options.limit, 10) || 20));
+    const limit = Math.max(1, Math.min(200, Number.parseInt(options.limit, 10) || 20));
     const statuses = Array.isArray(options.statuses)
         ? options.statuses.map(item => normalizeJobStatus(item, '')).filter(Boolean)
         : [];
     const batchKey = normalizeBatchKey(options.batchKey);
+    const agentId = normalizeAgentId(options.agentId);
 
     let sql = 'SELECT * FROM update_jobs';
     const params = [];
@@ -105,6 +237,10 @@ async function listUpdateJobs(options = {}) {
     if (batchKey) {
         clauses.push('batch_key = ?');
         params.push(batchKey);
+    }
+    if (agentId) {
+        clauses.push('(target_agent_id = ? OR claim_agent_id = ?)');
+        params.push(agentId, agentId);
     }
     if (clauses.length > 0) {
         sql += ` WHERE ${clauses.join(' AND ')}`;
@@ -158,19 +294,33 @@ async function createUpdateJob(input = {}) {
         claimAgentId: normalizeAgentId(input.claimAgentId),
         progressPercent: Math.max(0, Math.min(100, Number.parseInt(input.progressPercent, 10) || 0)),
         summaryMessage: String(input.summaryMessage || '').trim(),
-        payload: input.payload && typeof input.payload === 'object' ? input.payload : null,
-        result: input.result && typeof input.result === 'object' ? input.result : null,
+        payload: normalizeObject(input.payload),
+        result: normalizeObject(input.result),
+        preflight: normalizeObject(input.preflight),
+        rollbackPayload: normalizeObject(input.rollbackPayload),
+        verification: normalizeObject(input.verification),
+        executionPhase: normalizeExecutionPhase(input.executionPhase, input.status === 'running' ? 'preflight' : 'queued'),
         errorMessage: String(input.errorMessage || '').trim(),
     };
+    const resultSignature = String(input.resultSignature || '').trim() || buildResultSignature({
+        status: record.status,
+        executionPhase: record.executionPhase,
+        summaryMessage: record.summaryMessage,
+        errorMessage: record.errorMessage,
+        result: record.result,
+        verification: record.verification,
+        rollbackPayload: record.rollbackPayload,
+    });
 
     const insertId = await transaction(async (conn) => {
         const [result] = await conn.query(
             `INSERT INTO update_jobs (
                 job_key, kind, scope, strategy, status, source_version, target_version,
                 batch_key, preserve_current, require_drain, drain_node_ids, note, created_by, target_agent_id, claim_agent_id,
-                progress_percent, summary_message, payload_json, result_json, error_message,
+                progress_percent, summary_message, payload_json, result_json, preflight_json, rollback_payload_json,
+                verification_json, result_signature, execution_phase, error_message,
                 claimed_at, started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 record.jobKey,
                 record.kind,
@@ -191,6 +341,11 @@ async function createUpdateJob(input = {}) {
                 record.summaryMessage,
                 record.payload ? JSON.stringify(record.payload) : null,
                 record.result ? JSON.stringify(record.result) : null,
+                record.preflight ? JSON.stringify(record.preflight) : null,
+                record.rollbackPayload ? JSON.stringify(record.rollbackPayload) : null,
+                record.verification ? JSON.stringify(record.verification) : null,
+                resultSignature,
+                record.executionPhase,
                 record.errorMessage,
                 input.claimedAt ? new Date(input.claimedAt) : null,
                 input.startedAt ? new Date(input.startedAt) : null,
@@ -214,7 +369,17 @@ async function updateUpdateJob(idOrKey, patch = {}) {
         params.push(value);
     };
 
-    if (patch.status !== undefined) applyValue('status', normalizeJobStatus(patch.status, target.status));
+    const nextPreview = {
+        status: patch.status !== undefined ? normalizeJobStatus(patch.status, target.status) : target.status,
+        executionPhase: patch.executionPhase !== undefined ? normalizeExecutionPhase(patch.executionPhase, target.executionPhase) : target.executionPhase,
+        summaryMessage: patch.summaryMessage !== undefined ? String(patch.summaryMessage || '').trim() : target.summaryMessage,
+        errorMessage: patch.errorMessage !== undefined ? String(patch.errorMessage || '').trim() : target.errorMessage,
+        result: patch.result !== undefined ? normalizeObject(patch.result) : target.result,
+        verification: patch.verification !== undefined ? normalizeObject(patch.verification) : target.verification,
+        rollbackPayload: patch.rollbackPayload !== undefined ? normalizeObject(patch.rollbackPayload) : target.rollbackPayload,
+    };
+
+    if (patch.status !== undefined) applyValue('status', nextPreview.status);
     if (patch.strategy !== undefined) applyValue('strategy', normalizeStrategy(patch.strategy, target.strategy));
     if (patch.scope !== undefined) applyValue('scope', normalizeScope(patch.scope, target.scope));
     if (patch.targetVersion !== undefined) applyValue('target_version', String(patch.targetVersion || '').trim());
@@ -223,8 +388,8 @@ async function updateUpdateJob(idOrKey, patch = {}) {
     if (patch.note !== undefined) applyValue('note', String(patch.note || '').trim());
     if (patch.targetAgentId !== undefined) applyValue('target_agent_id', normalizeAgentId(patch.targetAgentId));
     if (patch.claimAgentId !== undefined) applyValue('claim_agent_id', normalizeAgentId(patch.claimAgentId));
-    if (patch.summaryMessage !== undefined) applyValue('summary_message', String(patch.summaryMessage || '').trim());
-    if (patch.errorMessage !== undefined) applyValue('error_message', String(patch.errorMessage || '').trim());
+    if (patch.summaryMessage !== undefined) applyValue('summary_message', nextPreview.summaryMessage);
+    if (patch.errorMessage !== undefined) applyValue('error_message', nextPreview.errorMessage);
     if (patch.progressPercent !== undefined) applyValue('progress_percent', Math.max(0, Math.min(100, Number.parseInt(patch.progressPercent, 10) || 0)));
     if (patch.preserveCurrent !== undefined) applyValue('preserve_current', patch.preserveCurrent ? 1 : 0);
     if (patch.requireDrain !== undefined) applyValue('require_drain', patch.requireDrain ? 1 : 0);
@@ -233,7 +398,24 @@ async function updateUpdateJob(idOrKey, patch = {}) {
         applyValue('drain_node_ids', drainNodeIds.length > 0 ? JSON.stringify(drainNodeIds) : null);
     }
     if (patch.payload !== undefined) applyValue('payload_json', patch.payload ? JSON.stringify(patch.payload) : null);
-    if (patch.result !== undefined) applyValue('result_json', patch.result ? JSON.stringify(patch.result) : null);
+    if (patch.result !== undefined) applyValue('result_json', nextPreview.result ? JSON.stringify(nextPreview.result) : null);
+    if (patch.preflight !== undefined) applyValue('preflight_json', patch.preflight ? JSON.stringify(patch.preflight) : null);
+    if (patch.rollbackPayload !== undefined) applyValue('rollback_payload_json', nextPreview.rollbackPayload ? JSON.stringify(nextPreview.rollbackPayload) : null);
+    if (patch.verification !== undefined) applyValue('verification_json', nextPreview.verification ? JSON.stringify(nextPreview.verification) : null);
+    if (patch.executionPhase !== undefined) applyValue('execution_phase', nextPreview.executionPhase);
+    if (patch.resultSignature !== undefined) {
+        applyValue('result_signature', String(patch.resultSignature || '').trim());
+    } else if (
+        patch.status !== undefined
+        || patch.executionPhase !== undefined
+        || patch.summaryMessage !== undefined
+        || patch.errorMessage !== undefined
+        || patch.result !== undefined
+        || patch.verification !== undefined
+        || patch.rollbackPayload !== undefined
+    ) {
+        applyValue('result_signature', buildResultSignature(nextPreview));
+    }
     if (patch.claimedAt !== undefined) applyValue('claimed_at', patch.claimedAt ? new Date(patch.claimedAt) : null);
     if (patch.startedAt !== undefined) applyValue('started_at', patch.startedAt ? new Date(patch.startedAt) : null);
     if (patch.finishedAt !== undefined) applyValue('finished_at', patch.finishedAt ? new Date(patch.finishedAt) : null);
@@ -249,6 +431,76 @@ async function updateUpdateJob(idOrKey, patch = {}) {
     );
 
     return getUpdateJobById(target.id);
+}
+
+async function appendUpdateJobLog(input = {}) {
+    const pool = getPool();
+    const jobId = Math.max(0, Number.parseInt(input.jobId, 10) || 0);
+    if (!jobId) {
+        return null;
+    }
+    const phase = normalizeExecutionPhase(input.phase, 'queued');
+    const level = normalizeJobLogLevel(input.level, 'info');
+    const message = String(input.message || '').trim();
+    const payload = normalizeObject(input.payload);
+
+    const [result] = await pool.query(
+        `INSERT INTO update_job_logs (job_id, phase, level, message, payload_json)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+            jobId,
+            phase,
+            level,
+            message,
+            payload ? JSON.stringify(payload) : null,
+        ],
+    );
+
+    const insertId = Number(result.insertId) || 0;
+    const [rows] = await pool.query(
+        'SELECT * FROM update_job_logs WHERE id = ? LIMIT 1',
+        [insertId],
+    );
+    return mapJobLogRow(rows && rows[0]);
+}
+
+async function listUpdateJobLogs(options = {}) {
+    const pool = getPool();
+    const jobId = Math.max(0, Number.parseInt(options.jobId, 10) || 0);
+    if (!jobId) {
+        return [];
+    }
+    const limit = Math.max(1, Math.min(200, Number.parseInt(options.limit, 10) || 50));
+    const beforeId = Math.max(0, Number.parseInt(options.beforeId, 10) || 0);
+    const phase = normalizeExecutionPhase(options.phase, '');
+    const levels = Array.isArray(options.levels)
+        ? options.levels.map(item => normalizeJobLogLevel(item, '')).filter(Boolean)
+        : [];
+    const clauses = ['job_id = ?'];
+    const params = [jobId];
+    if (beforeId > 0) {
+        clauses.push('id < ?');
+        params.push(beforeId);
+    }
+    if (phase) {
+        clauses.push('phase = ?');
+        params.push(phase);
+    }
+    if (levels.length > 0) {
+        clauses.push(`level IN (${levels.map(() => '?').join(',')})`);
+        params.push(...levels);
+    }
+    params.push(limit);
+
+    const [rows] = await pool.query(
+        `SELECT *
+         FROM update_job_logs
+         WHERE ${clauses.join(' AND ')}
+         ORDER BY id DESC
+         LIMIT ?`,
+        params,
+    );
+    return (rows || []).map(mapJobLogRow).filter(Boolean);
 }
 
 async function claimNextUpdateJob(agentId) {
@@ -285,6 +537,20 @@ async function claimNextUpdateJob(agentId) {
     });
 }
 
+async function findLatestSuccessfulRollbackCandidate(options = {}) {
+    const pool = getPool();
+    const targetAgentId = normalizeAgentId(options.targetAgentId);
+    const params = [UPDATE_JOB_STATUS.SUCCEEDED];
+    let sql = 'SELECT * FROM update_jobs WHERE status = ? AND rollback_payload_json IS NOT NULL';
+    if (targetAgentId) {
+        sql += ' AND (target_agent_id = ? OR claim_agent_id = ?)';
+        params.push(targetAgentId, targetAgentId);
+    }
+    sql += ' ORDER BY finished_at DESC, id DESC LIMIT 1';
+    const [rows] = await pool.query(sql, params);
+    return mapJobRow(rows && rows[0]);
+}
+
 function summarizeUpdateJobBatch(jobs = []) {
     const items = (Array.isArray(jobs) ? jobs : []).filter(Boolean);
     if (items.length === 0) return null;
@@ -301,16 +567,23 @@ function summarizeUpdateJobBatch(jobs = []) {
         failed: 0,
         cancelled: 0,
     };
+    const childJobsByAgent = {};
     for (const item of items) {
         if (Object.prototype.hasOwnProperty.call(statusCounts, item.status)) {
             statusCounts[item.status] += 1;
         }
+        const agentKey = normalizeAgentId(item.targetAgentId || item.claimAgentId || 'unassigned') || 'unassigned';
+        if (!childJobsByAgent[agentKey]) {
+            childJobsByAgent[agentKey] = [];
+        }
+        childJobsByAgent[agentKey].push(item);
     }
     const activeCount = statusCounts.pending + statusCounts.claimed + statusCounts.running;
     const failedCount = statusCounts.failed;
     const summaryStatus = activeCount > 0
         ? (statusCounts.running > 0 ? 'running' : (statusCounts.claimed > 0 ? 'claimed' : 'pending'))
         : (failedCount > 0 ? 'failed' : (statusCounts.cancelled === items.length ? 'cancelled' : 'succeeded'));
+    const nodeAggregation = buildBatchNodeMap(items);
 
     return {
         batchKey: normalizeBatchKey(latestJob.batchKey),
@@ -336,6 +609,9 @@ function summarizeUpdateJobBatch(jobs = []) {
         latestJobKey: latestJob.jobKey || '',
         latestSummaryMessage: latestJob.summaryMessage || '',
         latestErrorMessage: latestJob.errorMessage || '',
+        executionPhase: latestJob.executionPhase || 'queued',
+        childJobsByAgent,
+        ...nodeAggregation,
         createdAt: Math.min(...items.map(item => item.createdAt || Date.now())),
         updatedAt: Math.max(...items.map(item => item.updatedAt || item.createdAt || 0)),
     };
@@ -343,19 +619,30 @@ function summarizeUpdateJobBatch(jobs = []) {
 
 module.exports = {
     UPDATE_JOB_STATUS,
+    UPDATE_EXECUTION_PHASE_OPTIONS,
+    UPDATE_FAILURE_CATEGORY_OPTIONS,
+    UPDATE_JOB_LOG_LEVEL_OPTIONS,
+    buildResultSignature,
     mapJobRow,
+    mapJobLogRow,
     listUpdateJobs,
     getUpdateJobById,
     findActiveUpdateJob,
     createUpdateJob,
     updateUpdateJob,
+    appendUpdateJobLog,
+    listUpdateJobLogs,
     claimNextUpdateJob,
     normalizeJobStatus,
     normalizeScope,
     normalizeStrategy,
     normalizeKind,
+    normalizeExecutionPhase,
+    normalizeFailureCategory,
+    normalizeJobLogLevel,
     normalizeNodeIdList,
     normalizeBatchKey,
     normalizeAgentId,
     summarizeUpdateJobBatch,
+    findLatestSuccessfulRollbackCandidate,
 };

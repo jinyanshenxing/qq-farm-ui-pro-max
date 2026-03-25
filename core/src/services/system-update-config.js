@@ -113,6 +113,11 @@ function normalizeSystemUpdateConfig(input = {}) {
         agentMode: String(input.agentMode || 'db_polling').trim() || 'db_polling',
         agentPollIntervalSec: Math.max(5, Number.parseInt(input.agentPollIntervalSec, 10) || 15),
         defaultDrainNodeIds: normalizeStringList(input.defaultDrainNodeIds),
+        maintenanceWindow: String(input.maintenanceWindow || '').trim(),
+        autoSyncAnnouncements: !!input.autoSyncAnnouncements,
+        autoRunVerification: input.autoRunVerification !== undefined ? !!input.autoRunVerification : true,
+        promptRollbackOnFailure: input.promptRollbackOnFailure !== undefined ? !!input.promptRollbackOnFailure : true,
+        defaultLogTailLines: Math.max(20, Number.parseInt(input.defaultLogTailLines, 10) || 80),
     };
 }
 

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS cards (
   used_by INTEGER,     -- users.id
   enabled BOOLEAN DEFAULT true,
   expires_at DATETIME,
+  expires_override BOOLEAN DEFAULT false,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (used_by) REFERENCES users(id)
 );

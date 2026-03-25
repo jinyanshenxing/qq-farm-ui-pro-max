@@ -15,6 +15,7 @@ const SYSTEM_SETTING_KEYS = Object.freeze({
     UPDATE_CONFIG: 'update_config',
     UPDATE_RELEASE_CACHE: 'update_release_cache',
     UPDATE_RUNTIME: 'update_runtime',
+    HELP_CENTER_OBSERVABILITY_CONFIG: 'help_center_observability_config',
 });
 
 function getLegacyFallbackSources() {

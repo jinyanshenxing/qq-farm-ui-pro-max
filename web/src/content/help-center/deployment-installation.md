@@ -41,10 +41,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/m
 - `init-db/01-init.sql`
 - `install-or-update.sh`
 - `update-app.sh`
+- `update-agent.sh`
+- `install-update-agent-service.sh`
 - `safe-update.sh`
 - `repair-mysql.sh`
 - `repair-deploy.sh`
 - `verify-stack.sh`
+- `smoke-system-update-center.sh`
 
 ## 首装后第一件事
 
@@ -59,6 +62,27 @@ curl http://localhost:3080/api/ping
 
 ```bash
 ls -la /opt/qq-farm-current
+```
+
+## 如果准备走后台远程更新
+
+首装完成后，如果你打算以后直接在后台“系统更新中心”远程更新宿主机，建议立即把更新代理装成常驻服务：
+
+```bash
+cd /opt/qq-farm-current
+bash install-update-agent-service.sh
+systemctl status qq-farm-update-agent
+```
+
+如果想在第一次正式更新前先做联动检查，还可以运行：
+
+```bash
+cd /opt/qq-farm-current
+bash smoke-system-update-center.sh \
+  --base-url http://127.0.0.1:9527 \
+  --username admin \
+  --password '你的管理员密码' \
+  --deploy-dir /opt/qq-farm-current
 ```
 
 ## 当前推荐思路

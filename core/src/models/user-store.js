@@ -487,6 +487,7 @@ function buildCardSnapshot(card) {
         usedBy: card.usedBy || null,
         usedAt: card.usedAt || null,
         expiresAt: card.expiresAt || null,
+        expiresOverride: !!card.expiresOverride,
         createdAt: card.createdAt || null,
         updatedAt: card.updatedAt || null,
     };
@@ -726,11 +727,15 @@ async function loadUsers() {
             if (u) {
                 const days = normalizeCardDays(c.days, c.type);
                 const usedAt = getCardEffectiveTime(c);
-                const expiresAt = computeCardExpiresAt(u.card?.expiresAt || null, usedAt, c.type, days);
                 const dbExpiresAt = c.expires_at ? new Date(c.expires_at).getTime() : null;
+                const computedExpiresAt = computeCardExpiresAt(u.card?.expiresAt || null, usedAt, c.type, days);
+                const hasManualExpiryOverride = Number(c.expires_override || 0) === 1;
+                const expiresAt = hasManualExpiryOverride || dbExpiresAt !== null
+                    ? dbExpiresAt
+                    : computedExpiresAt;
 
-                if (expiresAt !== dbExpiresAt) {
-                    repairs.push({ id: c.id, expiresAt });
+                if (!hasManualExpiryOverride && dbExpiresAt === null && computedExpiresAt !== null) {
+                    repairs.push({ id: c.id, expiresAt: computedExpiresAt });
                 }
 
                 u.cardCode = c.code;
@@ -741,6 +746,7 @@ async function loadUsers() {
                     typeChar: c.type,
                     days,
                     expiresAt,
+                    expiresOverride: hasManualExpiryOverride,
                     enabled: (u.status || 'active') !== 'banned'
                 };
                 u.maxAccounts = c.type === CARD_TYPES.TRIAL ? getTrialMaxAccounts() : 0;
@@ -806,7 +812,8 @@ async function loadCards() {
             usedAt: r.used_at ? new Date(r.used_at).getTime() : null,
             createdAt: new Date(r.created_at).getTime(),
             updatedAt: r.updated_at ? new Date(r.updated_at).getTime() : new Date(r.created_at).getTime(),
-            expiresAt: r.expires_at ? new Date(r.expires_at).getTime() : null
+            expiresAt: r.expires_at ? new Date(r.expires_at).getTime() : null,
+            expiresOverride: r.expires_override === 1
         }));
     } catch (e) {
         logUserStoreError('加载卡密数据失败', e);
@@ -1237,6 +1244,7 @@ async function updateUser(username, updates) {
     if (updates.expiresAt !== undefined) {
         if (!user.card) user.card = {};
         user.card.expiresAt = updates.expiresAt;
+        user.card.expiresOverride = true;
     }
 
     if (updates.enabled !== undefined) {
@@ -1276,10 +1284,15 @@ async function updateUser(username, updates) {
             );
             username = user.username;
         }
-        if (user.card) {
+        if (updates.expiresAt !== undefined && user.card?.code) {
             await pool.query(
-                "UPDATE cards SET expires_at=? WHERE used_by=(SELECT id FROM users WHERE username = ?)",
-                [user.card.expiresAt ? new Date(user.card.expiresAt) : null, username]
+                "UPDATE cards SET expires_at=?, expires_override=?, updated_at=? WHERE code=?",
+                [
+                    user.card.expiresAt ? new Date(user.card.expiresAt) : null,
+                    1,
+                    new Date(),
+                    user.card.code,
+                ]
             );
         }
         if (updates.password !== undefined && String(updates.password).trim()) {

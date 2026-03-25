@@ -1,3 +1,5 @@
+const { parseUpdateLogEntries } = require('../../services/announcement-materializer');
+
 function createAccountRuntimeHelpers({
     getProvider,
     getAccountsSnapshot,
@@ -116,52 +118,15 @@ function createUpdateLogParser({
         const logPath = pathRef.join(baseDir, '../../../logs/development/Update.log');
         if (!fsRef.existsSync(logPath)) return [];
         const raw = fsRef.readFileSync(logPath, 'utf-8');
-        const lines = raw.split(/\r?\n/);
-        const entries = [];
-        const dateRe = /^(\d{4}-\d{2}-\d{2})(?:\s+|$)/;
-        const versionRe = /前端[：:]\s*(v[\d.]+)/;
-
-        let current = null;
-
-        const pushCurrent = () => {
-            if (!current) return;
-            const header = `${current.date} ${current.title}`;
-            const blockText = [header, ...current.contentLines].join('\n');
-            const versionMatch = header.match(versionRe) || blockText.match(versionRe);
-            entries.push({
-                date: current.date,
-                title: current.title,
-                version: versionMatch ? versionMatch[1] : '',
-                content: current.contentLines.join('\n').trim(),
-            });
-            current = null;
-        };
-
-        for (const line of lines) {
-            const trimmed = line.trim();
-            const dateMatch = trimmed.match(dateRe);
-            if (dateMatch) {
-                const title = trimmed.slice(dateMatch[0].length).trim();
-                if (!title) {
-                    continue;
-                }
-                pushCurrent();
-                current = {
-                    date: dateMatch[1],
-                    title,
-                    contentLines: [],
-                };
-                continue;
-            }
-            if (current) {
-                current.contentLines.push(line);
-            }
-        }
-
-        pushCurrent();
-        notificationsCache = entries;
+        const parsedEntries = parseUpdateLogEntries(raw);
+        notificationsCache = parsedEntries.map((entry) => ({
+            date: entry.publishDate,
+            title: entry.title,
+            version: entry.version,
+            content: entry.content,
+        }));
         notificationsCacheTime = now;
-        return entries;
+        return notificationsCache;
     };
 }
 

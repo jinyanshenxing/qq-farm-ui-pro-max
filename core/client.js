@@ -16,10 +16,12 @@ const { createAiServiceRuntime, createMainShutdownRuntime } = require('./src/run
 const { createModuleLogger } = require('./src/services/logger');
 const { initJobs } = require('./src/jobs/index');
 const { initDatabase, closeDatabase } = require('./src/services/database');
+const { createAnnouncementRuntime } = require('./src/services/announcement-materializer');
 const { inspectSystemSettingsHealth } = require('./src/services/system-settings');
 const { getServiceProfileConfig, resolveServiceProfileSnapshot } = require('./src/services/service-profile');
 
 const mainLogger = createModuleLogger('main');
+const announcementRuntime = createAnnouncementRuntime();
 
 function buildStartupBlockMessage(err) {
     const message = String(err && err.message ? err.message : err || 'unknown');
@@ -101,6 +103,24 @@ if (isWorkerProcess) {
 
             if (store.loadAllFromDB) {
                 await store.loadAllFromDB({ refreshGlobalConfig: false });
+            }
+
+            try {
+                const announcementSeedResult = await announcementRuntime.ensureAnnouncementsSeeded();
+                if (announcementSeedResult.seeded) {
+                    mainLogger.info('announcement bootstrap seeded entries', {
+                        added: announcementSeedResult.added || 0,
+                        updated: announcementSeedResult.updated || 0,
+                        skipped: announcementSeedResult.skipped || 0,
+                        totalParsed: announcementSeedResult.totalParsed || 0,
+                        latestVersion: announcementSeedResult.latestVersion || '',
+                        sources: announcementSeedResult.sources || {},
+                    });
+                }
+            } catch (error) {
+                mainLogger.warn('announcement bootstrap failed, continuing without blocking startup', {
+                    error: error && error.message ? error.message : String(error),
+                });
             }
 
             const settingsHealth = await inspectSystemSettingsHealth();

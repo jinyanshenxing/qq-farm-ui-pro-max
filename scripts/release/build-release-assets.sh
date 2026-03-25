@@ -133,21 +133,28 @@ create_versioned_deploy_bundle() {
     bundle_dir="${tmp_dir}/qq-farm-deploy"
 
     mkdir -p "${bundle_dir}/init-db"
+    mkdir -p "${bundle_dir}/logs/development"
     cp "${PROJECT_ROOT}/deploy/docker-compose.yml" "${bundle_dir}/docker-compose.yml"
     cp "${PROJECT_ROOT}/deploy/.env.example" "${bundle_dir}/.env.example"
     cp "${PROJECT_ROOT}/deploy/README.md" "${bundle_dir}/README.md"
+    cp "${PROJECT_ROOT}/CHANGELOG.md" "${bundle_dir}/CHANGELOG.md"
     cp "${PROJECT_ROOT}/deploy/init-db/01-init.sql" "${bundle_dir}/init-db/01-init.sql"
     cp "${PROJECT_ROOT}/scripts/deploy/fresh-install.sh" "${bundle_dir}/fresh-install.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/install-or-update.sh" "${bundle_dir}/install-or-update.sh"
+    cp "${PROJECT_ROOT}/scripts/deploy/safe-update.sh" "${bundle_dir}/safe-update.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/update-agent.sh" "${bundle_dir}/update-agent.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/install-update-agent-service.sh" "${bundle_dir}/install-update-agent-service.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/manual-config-wizard.sh" "${bundle_dir}/manual-config-wizard.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/stack-layout.sh" "${bundle_dir}/stack-layout.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/verify-stack.sh" "${bundle_dir}/verify-stack.sh"
+    cp "${PROJECT_ROOT}/scripts/deploy/smoke-system-update-center.sh" "${bundle_dir}/smoke-system-update-center.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/repair-mysql.sh" "${bundle_dir}/repair-mysql.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/repair-deploy.sh" "${bundle_dir}/repair-deploy.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/update-app.sh" "${bundle_dir}/update-app.sh"
     cp "${PROJECT_ROOT}/scripts/deploy/quick-deploy.sh" "${bundle_dir}/quick-deploy.sh"
+    if [ -f "${PROJECT_ROOT}/logs/development/Update.log" ]; then
+        cp "${PROJECT_ROOT}/logs/development/Update.log" "${bundle_dir}/logs/development/Update.log"
+    fi
 
     tar -C "${tmp_dir}" -czf "${OUTPUT_DIR}/qq-farm-bot-${RELEASE_TAG}-deploy.tar.gz" qq-farm-deploy
     rm -rf "${tmp_dir}"

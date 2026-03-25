@@ -21,7 +21,7 @@ import BaseTableToolbar from '@/components/ui/BaseTableToolbar.vue'
 import { useCopyFeedbackStore } from '@/stores/copy-feedback'
 import { useToastStore } from '@/stores/toast'
 
-type AdminOperationScope = 'users' | 'account_ownership' | 'runtime'
+type AdminOperationScope = 'users' | 'account_ownership' | 'runtime' | 'help_center'
 type AdminOperationStatus = 'success' | 'warning' | 'error'
 type ActionType = 'all' | 'create' | 'edit' | 'card' | 'ownership' | 'runtime' | 'delete' | 'batch' | 'other'
 type ScopeFilter = 'all' | AdminOperationScope
@@ -74,6 +74,7 @@ const scopeOptions = [
   { label: '用户管理', value: 'users' },
   { label: '账号归属', value: 'account_ownership' },
   { label: '运行时 / 热重载', value: 'runtime' },
+  { label: '帮助中心', value: 'help_center' },
 ]
 
 const statusOptions = [
@@ -118,7 +119,7 @@ function normalizeLogItem(raw: unknown): AdminOperationLogItem | null {
   return {
     id: String(item.id || '').trim() || `log-${Number(item.timestamp) || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     actorUsername: String(item.actorUsername || '').trim(),
-    scope: scope === 'users' || scope === 'account_ownership' || scope === 'runtime' ? scope : '',
+    scope: scope === 'users' || scope === 'account_ownership' || scope === 'runtime' || scope === 'help_center' ? scope : '',
     actionLabel: String(item.actionLabel || '').trim() || '未命名操作',
     status: status as AdminOperationStatus,
     totalCount: Math.max(Number(item.totalCount) || 0, 0),
@@ -159,6 +160,8 @@ function scopeLabel(scope: AdminOperationScope | '') {
     return '账号归属'
   if (scope === 'runtime')
     return '运行时'
+  if (scope === 'help_center')
+    return '帮助中心'
   return '其他范围'
 }
 
@@ -169,6 +172,8 @@ function scopeSubLabel(scope: AdminOperationScope | '') {
     return '绑定关系、模式、运行态'
   if (scope === 'runtime')
     return '仪表盘热重载、模块重建'
+  if (scope === 'help_center')
+    return '帮助文档反馈、埋点与跳转治理'
   return '未识别范围'
 }
 
@@ -179,6 +184,8 @@ function resolveScopeRoute(scope: AdminOperationScope | '') {
     return '/account-ownership'
   if (scope === 'runtime')
     return '/dashboard'
+  if (scope === 'help_center')
+    return '/help-center-feedback'
   return ''
 }
 
@@ -244,6 +251,8 @@ function scopeClass(scope: AdminOperationScope | '') {
     return 'operation-logs-scope operation-logs-scope-ownership'
   if (scope === 'runtime')
     return 'operation-logs-scope operation-logs-scope-runtime'
+  if (scope === 'help_center')
+    return 'operation-logs-scope operation-logs-scope-help-center'
   return 'operation-logs-scope operation-logs-scope-neutral'
 }
 
@@ -1513,6 +1522,11 @@ onBeforeUnmount(() => {
 .operation-logs-scope-runtime {
   background: color-mix(in srgb, var(--ui-status-info) 12%, transparent);
   color: color-mix(in srgb, var(--ui-status-info) 82%, var(--ui-text-1) 18%);
+}
+
+.operation-logs-scope-help-center {
+  background: color-mix(in srgb, var(--ui-status-warning) 14%, transparent);
+  color: color-mix(in srgb, var(--ui-status-warning) 82%, var(--ui-text-1) 18%);
 }
 
 .operation-logs-scope-neutral,

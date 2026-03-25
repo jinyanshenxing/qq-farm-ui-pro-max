@@ -189,6 +189,9 @@ function createFeatureDeps(overrides = {}) {
             registerAccountSettingsRoutes: makeRegistrar('registerAccountSettingsRoutes'),
             registerSettingsReportRoutes: makeRegistrar('registerSettingsReportRoutes'),
             registerBugReportRoutes: makeRegistrar('registerBugReportRoutes'),
+            registerHelpCenterObservabilityRoutes: makeRegistrar('registerHelpCenterObservabilityRoutes'),
+            registerHelpCenterAnalyticsRoutes: makeRegistrar('registerHelpCenterAnalyticsRoutes'),
+            registerHelpCenterFeedbackRoutes: makeRegistrar('registerHelpCenterFeedbackRoutes'),
             registerAccountReadRoutes: makeRegistrar('registerAccountReadRoutes'),
             registerAccountManagementRoutes: makeRegistrar('registerAccountManagementRoutes'),
             registerUserCardRoutes: makeRegistrar('registerUserCardRoutes'),
@@ -235,6 +238,9 @@ test('registerAdminFeatureRoutes keeps feature registration order and shared hel
         'registerAccountSettingsRoutes',
         'registerSettingsReportRoutes',
         'registerBugReportRoutes',
+        'registerHelpCenterObservabilityRoutes',
+        'registerHelpCenterAnalyticsRoutes',
+        'registerHelpCenterFeedbackRoutes',
         'registerAccountReadRoutes',
         'registerAccountManagementRoutes',
         'registerUserCardRoutes',
@@ -256,6 +262,9 @@ test('registerAdminFeatureRoutes keeps feature registration order and shared hel
     assert.equal(fixture.registerExternalApiRoutesArgs.healthProbeService, deps.healthProbeService);
     assert.equal(fixture.registerProxyAdminRoutesArgs.proxyPoolService, deps.proxyPoolService);
     assert.equal(fixture.registerBugReportRoutesArgs.getAccId, routeRuntime.getAccId);
+    assert.equal(fixture.registerHelpCenterObservabilityRoutesArgs.getPool, deps.getPool);
+    assert.equal(fixture.registerHelpCenterAnalyticsRoutesArgs.getPool, deps.getPool);
+    assert.equal(fixture.registerHelpCenterFeedbackRoutesArgs.adminOperationLogService, deps.adminOperationLogService);
     assert.equal(fixture.registerAnnouncementAdminRoutesArgs.parseUpdateLog, parseUpdateLogFn);
     assert.equal(fixture.registerNotificationsRouteArgs.parseUpdateLog, parseUpdateLogFn);
     assert.equal(fixture.registerTrialCardRoutesArgs.trialRateLimiter, trialRateLimiterFn);

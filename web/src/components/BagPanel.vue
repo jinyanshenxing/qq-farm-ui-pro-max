@@ -3,6 +3,7 @@ import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import type { BagPreferencesPayload } from '@/utils/bag-preference-sync'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseEmptyState from '@/components/ui/BaseEmptyState.vue'
 import BaseFilterChip from '@/components/ui/BaseFilterChip.vue'
@@ -14,6 +15,7 @@ import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { getBagPreferencesSyncState, hasBagPreferencesData, resolveBagPreferencesHydrationMode, setBagPreferencesSyncState } from '@/utils/bag-preference-sync'
 import { buildTradeSellConfigFromDraft, buildTradeSellStrategyDraft, normalizeTradeKeepFruitIds } from '@/utils/trade-config'
 
 const router = useRouter()
@@ -87,12 +89,18 @@ const strategyDraft = ref({
 const MALL_PURCHASE_HISTORY_KEY = 'qq-farm.mall.purchase-history.v1'
 const LEGACY_BAG_USE_HISTORY_KEY = 'qq-farm.bag.use-history.v1'
 const BAG_ACTIVITY_HISTORY_KEY = 'qq-farm.bag.activity-history.v1'
+const BAG_PREFERENCES_SYNC_STATE_KEY = 'qq-farm.bag.preferences-sync-state.v1'
 const LAND_TARGET_INTERACTIONS = new Set(['water', 'harvest', 'erase', 'erasegrass', 'killbug', 'plant'])
 const BAG_ACTIVITY_BROWSER_PREF_NOTE = '交易动态会跟随当前账号同步到服务器；断网或首屏加载时仍会先使用本机缓存兜底。'
 const MALL_PURCHASE_BROWSER_PREF_NOTE = '常买推荐会跟随当前账号同步到服务器；本机缓存只负责首屏回显和弱网兜底。'
 
 let bagPreferencesRevision = 0
 let bagPreferencesSyncTimer: ReturnType<typeof setTimeout> | null = null
+let bagPreferencesPendingSync: {
+  accountIdSnapshot: string
+  payloadSnapshot: BagPreferencesPayload
+  revisionSnapshot: number
+} | null = null
 
 const bagSortOptions = [
   { key: 'count_desc', label: '数量优先' },
@@ -429,21 +437,46 @@ function cloneJsonValue<T>(value: T, fallback: T): T {
   }
 }
 
-function buildBagPreferencesPayload() {
+function buildBagPreferencesPayload(): BagPreferencesPayload {
   return {
     purchaseMemory: cloneJsonValue(mallPurchaseMemory.value, {}),
     activityHistory: cloneJsonValue(activityHistory.value, []),
   }
 }
 
-function hasBagPreferencesData(payload: { purchaseMemory?: Record<string, any>, activityHistory?: any[] } | null | undefined) {
-  return !!payload && (
-    (payload.purchaseMemory && Object.keys(payload.purchaseMemory).length > 0)
-    || (Array.isArray(payload.activityHistory) && payload.activityHistory.length > 0)
-  )
+function buildBagPreferencesSyncSnapshot(
+  accountIdSnapshot = String(currentAccountId.value || '').trim(),
+  payloadSnapshot: BagPreferencesPayload = buildBagPreferencesPayload(),
+  revisionSnapshot = bagPreferencesRevision,
+) {
+  if (!accountIdSnapshot)
+    return null
+  return {
+    accountIdSnapshot,
+    payloadSnapshot,
+    revisionSnapshot,
+  }
 }
 
-function applyBagPreferencesPayload(payload: { purchaseMemory?: Record<string, any>, activityHistory?: any[] } | null | undefined) {
+function getBagPreferencesSyncStateForAccount(accountIdSnapshot: string) {
+  return getBagPreferencesSyncState(getSafeStorage(), BAG_PREFERENCES_SYNC_STATE_KEY, accountIdSnapshot)
+}
+
+function markBagPreferencesDirty(accountIdSnapshot: string) {
+  setBagPreferencesSyncState(getSafeStorage(), BAG_PREFERENCES_SYNC_STATE_KEY, accountIdSnapshot, {
+    dirty: true,
+    updatedAt: Date.now(),
+  })
+}
+
+function markBagPreferencesSynced(accountIdSnapshot: string) {
+  setBagPreferencesSyncState(getSafeStorage(), BAG_PREFERENCES_SYNC_STATE_KEY, accountIdSnapshot, {
+    dirty: false,
+    lastSyncedAt: Date.now(),
+  })
+}
+
+function applyBagPreferencesPayload(payload: BagPreferencesPayload | null | undefined) {
   mallPurchaseMemory.value = payload?.purchaseMemory && typeof payload.purchaseMemory === 'object'
     ? cloneJsonValue(payload.purchaseMemory, {})
     : {}
@@ -511,37 +544,46 @@ function loadActivityHistory() {
   }
 }
 
-function persistMallPurchaseMemory() {
+function persistMallPurchaseMemory(
+  accountIdSnapshot = String(currentAccountId.value || '').trim(),
+  purchaseMemorySnapshot = mallPurchaseMemory.value,
+) {
   const storage = getSafeStorage()
-  if (!storage || !currentAccountId.value)
+  if (!storage || !accountIdSnapshot)
     return
   try {
     const raw = storage.getItem(MALL_PURCHASE_HISTORY_KEY)
     const parsed = raw ? JSON.parse(raw) : {}
-    parsed[currentAccountId.value] = mallPurchaseMemory.value
+    parsed[accountIdSnapshot] = cloneJsonValue(purchaseMemorySnapshot, {})
     storage.setItem(MALL_PURCHASE_HISTORY_KEY, JSON.stringify(parsed))
   }
   catch {
   }
 }
 
-function persistActivityHistory() {
+function persistActivityHistory(
+  accountIdSnapshot = String(currentAccountId.value || '').trim(),
+  activityHistorySnapshot = activityHistory.value,
+) {
   const storage = getSafeStorage()
-  if (!storage || !currentAccountId.value)
+  if (!storage || !accountIdSnapshot)
     return
   try {
     const raw = storage.getItem(BAG_ACTIVITY_HISTORY_KEY)
     const parsed = raw ? JSON.parse(raw) : {}
-    parsed[currentAccountId.value] = activityHistory.value
+    parsed[accountIdSnapshot] = cloneJsonValue(activityHistorySnapshot, [])
     storage.setItem(BAG_ACTIVITY_HISTORY_KEY, JSON.stringify(parsed))
   }
   catch {
   }
 }
 
-function persistBagPreferencesLocally() {
-  persistMallPurchaseMemory()
-  persistActivityHistory()
+function persistBagPreferencesLocally(
+  accountIdSnapshot = String(currentAccountId.value || '').trim(),
+  payloadSnapshot: BagPreferencesPayload = buildBagPreferencesPayload(),
+) {
+  persistMallPurchaseMemory(accountIdSnapshot, payloadSnapshot.purchaseMemory || {})
+  persistActivityHistory(accountIdSnapshot, payloadSnapshot.activityHistory || [])
 }
 
 function clearBagPreferencesSyncTimer() {
@@ -551,30 +593,78 @@ function clearBagPreferencesSyncTimer() {
   }
 }
 
-function scheduleBagPreferencesSync() {
-  const accountIdSnapshot = String(currentAccountId.value || '').trim()
-  if (!accountIdSnapshot)
-    return
-  const payloadSnapshot = buildBagPreferencesPayload()
-  const revisionSnapshot = bagPreferencesRevision
-  clearBagPreferencesSyncTimer()
-  bagPreferencesSyncTimer = setTimeout(async () => {
-    const saved = await bagStore.saveBagPreferences(accountIdSnapshot, payloadSnapshot)
-    if (!saved)
-      return
-    if (String(currentAccountId.value || '').trim() !== accountIdSnapshot)
-      return
-    if (bagPreferencesRevision !== revisionSnapshot)
-      return
+async function syncBagPreferencesSnapshot(
+  snapshot: NonNullable<ReturnType<typeof buildBagPreferencesSyncSnapshot>>,
+  options: { applyIfCurrent?: boolean } = {},
+) {
+  const saved = await bagStore.saveBagPreferences(snapshot.accountIdSnapshot, snapshot.payloadSnapshot)
+  if (!saved)
+    return false
+
+  markBagPreferencesSynced(snapshot.accountIdSnapshot)
+  persistBagPreferencesLocally(snapshot.accountIdSnapshot, saved)
+
+  if (
+    options.applyIfCurrent !== false
+    && String(currentAccountId.value || '').trim() === snapshot.accountIdSnapshot
+    && bagPreferencesRevision === snapshot.revisionSnapshot
+  ) {
     applyBagPreferencesPayload(saved)
-    persistBagPreferencesLocally()
+  }
+
+  if (
+    bagPreferencesPendingSync
+    && bagPreferencesPendingSync.accountIdSnapshot === snapshot.accountIdSnapshot
+    && bagPreferencesPendingSync.revisionSnapshot === snapshot.revisionSnapshot
+  ) {
+    bagPreferencesPendingSync = null
+  }
+
+  return true
+}
+
+async function flushBagPreferencesSync(options: {
+  snapshot?: ReturnType<typeof buildBagPreferencesSyncSnapshot>
+  includeCurrentDirty?: boolean
+  applyIfCurrent?: boolean
+} = {}) {
+  let snapshot = options.snapshot || bagPreferencesPendingSync
+
+  if (!snapshot && options.includeCurrentDirty) {
+    const currentAccountIdSnapshot = String(currentAccountId.value || '').trim()
+    if (currentAccountIdSnapshot && getBagPreferencesSyncStateForAccount(currentAccountIdSnapshot).dirty) {
+      snapshot = buildBagPreferencesSyncSnapshot(currentAccountIdSnapshot)
+    }
+  }
+
+  if (!snapshot)
+    return false
+
+  clearBagPreferencesSyncTimer()
+  return await syncBagPreferencesSnapshot(snapshot, { applyIfCurrent: options.applyIfCurrent })
+}
+
+function scheduleBagPreferencesSync(snapshot: ReturnType<typeof buildBagPreferencesSyncSnapshot> = buildBagPreferencesSyncSnapshot()) {
+  if (!snapshot)
+    return
+  bagPreferencesPendingSync = snapshot
+  clearBagPreferencesSyncTimer()
+  bagPreferencesSyncTimer = setTimeout(() => {
+    void flushBagPreferencesSync({
+      snapshot,
+      applyIfCurrent: true,
+    })
   }, 240)
 }
 
 function persistBagPreferences() {
   bagPreferencesRevision += 1
-  persistBagPreferencesLocally()
-  scheduleBagPreferencesSync()
+  const snapshot = buildBagPreferencesSyncSnapshot()
+  if (!snapshot)
+    return
+  persistBagPreferencesLocally(snapshot.accountIdSnapshot, snapshot.payloadSnapshot)
+  markBagPreferencesDirty(snapshot.accountIdSnapshot)
+  scheduleBagPreferencesSync(snapshot)
 }
 
 async function hydrateBagPreferences() {
@@ -583,26 +673,41 @@ async function hydrateBagPreferences() {
     return
   const revisionSnapshot = bagPreferencesRevision
   const localSnapshot = buildBagPreferencesPayload()
+  const syncState = getBagPreferencesSyncStateForAccount(accountIdSnapshot)
   const serverSnapshot = await bagStore.fetchBagPreferences(accountIdSnapshot)
   if (String(currentAccountId.value || '').trim() !== accountIdSnapshot)
     return
   if (bagPreferencesRevision !== revisionSnapshot)
     return
-  if (serverSnapshot && hasBagPreferencesData(serverSnapshot)) {
-    applyBagPreferencesPayload(serverSnapshot)
-    persistBagPreferencesLocally()
-    return
-  }
-  if (hasBagPreferencesData(localSnapshot)) {
+
+  const hydrationMode = resolveBagPreferencesHydrationMode({
+    localPayload: localSnapshot,
+    remotePayload: serverSnapshot,
+    syncState,
+  })
+
+  if (hydrationMode === 'prefer_local_dirty' || hydrationMode === 'migrate_local') {
     const migrated = await bagStore.saveBagPreferences(accountIdSnapshot, localSnapshot)
-    if (!migrated)
-      return
     if (String(currentAccountId.value || '').trim() !== accountIdSnapshot)
       return
     if (bagPreferencesRevision !== revisionSnapshot)
       return
+    if (!migrated) {
+      markBagPreferencesDirty(accountIdSnapshot)
+      applyBagPreferencesPayload(localSnapshot)
+      persistBagPreferencesLocally(accountIdSnapshot, localSnapshot)
+      return
+    }
+    markBagPreferencesSynced(accountIdSnapshot)
     applyBagPreferencesPayload(migrated)
-    persistBagPreferencesLocally()
+    persistBagPreferencesLocally(accountIdSnapshot, migrated)
+    return
+  }
+
+  if (hydrationMode === 'prefer_remote' && serverSnapshot) {
+    markBagPreferencesSynced(accountIdSnapshot)
+    applyBagPreferencesPayload(serverSnapshot)
+    persistBagPreferencesLocally(accountIdSnapshot, serverSnapshot)
   }
 }
 
@@ -1725,11 +1830,23 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  clearBagPreferencesSyncTimer()
+  void flushBagPreferencesSync({
+    includeCurrentDirty: true,
+    applyIfCurrent: false,
+  })
 })
 
-watch(currentAccountId, () => {
-  clearBagPreferencesSyncTimer()
+watch(currentAccountId, (_nextAccountId, previousAccountId) => {
+  const previousAccountIdSnapshot = String(previousAccountId || '').trim()
+  const previousSnapshot = previousAccountIdSnapshot && getBagPreferencesSyncStateForAccount(previousAccountIdSnapshot).dirty
+    ? buildBagPreferencesSyncSnapshot(previousAccountIdSnapshot)
+    : null
+
+  void flushBagPreferencesSync({
+    snapshot: previousSnapshot,
+    applyIfCurrent: false,
+  })
+
   clearSelection()
   closeDetailPanel()
   targetLandsAccountId.value = ''

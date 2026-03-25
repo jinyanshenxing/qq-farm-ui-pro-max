@@ -347,6 +347,11 @@ export interface SystemUpdateConfig {
   agentMode: string
   agentPollIntervalSec: number
   defaultDrainNodeIds: string[]
+  maintenanceWindow: string
+  autoSyncAnnouncements: boolean
+  autoRunVerification: boolean
+  promptRollbackOnFailure: boolean
+  defaultLogTailLines: number
 }
 
 export interface SystemUpdateRuntimeAgent {
@@ -406,6 +411,11 @@ export interface SystemUpdateJob {
   summaryMessage: string
   payload: Record<string, any> | null
   result: Record<string, any> | null
+  preflight: SystemUpdatePreflight | null
+  rollbackPayload: Record<string, any> | null
+  verification: Record<string, any> | null
+  resultSignature: string
+  executionPhase: string
   errorMessage: string
   claimedAt: number
   startedAt: number
@@ -438,8 +448,71 @@ export interface SystemUpdateBatchSummary {
   latestJobKey: string
   latestSummaryMessage: string
   latestErrorMessage: string
+  executionPhase: string
+  childJobsByAgent?: Record<string, SystemUpdateJob[]>
+  runningNodeCount?: number
+  blockedNodeCount?: number
+  failedNodeCount?: number
+  perNodePhase?: Record<string, string>
+  perNodeErrorSummary?: Record<string, string>
+  failedCategories?: Record<string, number>
   createdAt: number
   updatedAt: number
+}
+
+export interface SystemUpdatePreflightCheck {
+  key: string
+  label: string
+  status: string
+  blocker: boolean
+  warning: boolean
+  message: string
+  details: Record<string, any> | null
+}
+
+export interface SystemUpdatePreflight {
+  checkedAt: number
+  ok: boolean
+  scope: string
+  strategy: string
+  targetVersion: string
+  blockerCount: number
+  warningCount: number
+  checks: SystemUpdatePreflightCheck[]
+  blockers: SystemUpdatePreflightCheck[]
+  warnings: SystemUpdatePreflightCheck[]
+  release: Record<string, any> | null
+  disk: Record<string, any> | null
+  dependencies: Record<string, any> | null
+  reloginRisk: Record<string, any> | null
+  agentStatus: Record<string, any> | null
+  preflightOverride: Record<string, any> | null
+  targetAgentId?: string
+  managedNodeIds?: string[]
+  drainNodeIds?: string[]
+  drainCutoverReadiness?: SystemUpdateDrainCutoverReadiness | null
+}
+
+export interface SystemUpdateJobLogEntry {
+  id: number
+  jobId: number
+  phase: string
+  level: string
+  message: string
+  payload: Record<string, any> | null
+  createdAt: number
+}
+
+export interface SystemUpdateJobDetail {
+  job: SystemUpdateJob | null
+  logs: SystemUpdateJobLogEntry[]
+  currentPhase: string
+  preflight: SystemUpdatePreflight | null
+  verification: Record<string, any> | null
+  rollbackPayload: Record<string, any> | null
+  resultSignature: string
+  logFilePath: string
+  latestLogId: number
 }
 
 export interface SystemUpdateDrainCutoverBlocker {
@@ -453,6 +526,27 @@ export interface SystemUpdateDrainCutoverBlocker {
   needsReloginAfterStop: boolean
 }
 
+export interface SystemUpdateDrainCutoverAffectedAccount {
+  accountId: string
+  accountName: string
+  platform: string
+  nodeId: string
+  credentialKind: string
+  needsReloginAfterStop: boolean
+}
+
+export interface SystemUpdateDrainCutoverBlockingNode {
+  nodeId: string
+  blockerCount: number
+  affectedAccounts: Array<{
+    accountId: string
+    accountName: string
+    platform: string
+    reasonCode: string
+    needsReloginAfterStop: boolean
+  }>
+}
+
 export interface SystemUpdateDrainCutoverReadiness {
   checkedAt: number
   canDrainCutover: boolean
@@ -461,6 +555,11 @@ export interface SystemUpdateDrainCutoverReadiness {
   targetedRunningAccountCount: number
   blockerCount: number
   reloginRequiredCount: number
+  affectedAccounts?: SystemUpdateDrainCutoverAffectedAccount[]
+  blockingNodes?: SystemUpdateDrainCutoverBlockingNode[]
+  estimatedDrainSeconds?: number
+  reloginRequiredAccounts?: SystemUpdateDrainCutoverAffectedAccount[]
+  forcedStopCandidates?: SystemUpdateDrainCutoverAffectedAccount[]
   blockers: SystemUpdateDrainCutoverBlocker[]
 }
 
@@ -471,6 +570,54 @@ export interface SystemUpdateReleaseCache {
   lastError: string
   latestRelease: SystemUpdateRelease | null
   releases: SystemUpdateRelease[]
+}
+
+export interface SystemUpdateAnnouncementPreviewEntry {
+  title: string
+  version: string
+  publishDate: string
+  summary: string
+  sourceType: string
+  releaseUrl: string
+}
+
+export interface SystemUpdateAnnouncementPreview {
+  added: number
+  updated: number
+  skipped: number
+  totalParsed: number
+  latestVersion: string
+  sources: Record<string, number>
+  entries: SystemUpdateAnnouncementPreviewEntry[]
+}
+
+export interface SystemUpdateSyncRecommendation {
+  suggested: boolean
+  reason: string
+  pendingCount: number
+  latestVersion: string
+}
+
+export interface SystemUpdateSmokeSummary {
+  status: string
+  checkedAt: number
+  checkedAtLabel: string
+  baseUrl: string
+  authMode: string
+  targetVersion: string
+  targetScope: string
+  targetStrategy: string
+  targetAgents: string
+  verifyTarget: string
+  passCount: number
+  warnCount: number
+  failCount: number
+  passItems: string[]
+  warnItems: string[]
+  failItems: string[]
+  rawFiles: string[]
+  reportDir: string
+  summaryPath: string
 }
 
 export interface SystemUpdateOverview {
@@ -484,6 +631,10 @@ export interface SystemUpdateOverview {
   activeJob: SystemUpdateJob | null
   activeBatch: SystemUpdateBatchSummary | null
   drainCutoverReadiness: SystemUpdateDrainCutoverReadiness | null
+  announcementPreview?: SystemUpdateAnnouncementPreview | null
+  syncRecommendation?: SystemUpdateSyncRecommendation | null
+  lastAnnouncementSyncResult?: SystemUpdateAnnouncementPreview | null
+  latestSmokeSummary?: SystemUpdateSmokeSummary | null
 }
 
 export interface SettingsState {
@@ -720,6 +871,22 @@ export const useSettingStore = defineStore('setting', () => {
     totalPages: 1,
   })
   const reportLogStats = ref<ReportLogStats>(createDefaultReportLogStats())
+
+  function mergeSystemUpdateOverview(next: SystemUpdateOverview | null | undefined) {
+    if (!next)
+      return null
+
+    const current = systemUpdateOverview.value
+    const merged: SystemUpdateOverview = {
+      ...next,
+      announcementPreview: next.announcementPreview ?? current?.announcementPreview ?? null,
+      syncRecommendation: next.syncRecommendation ?? current?.syncRecommendation ?? null,
+      lastAnnouncementSyncResult: next.lastAnnouncementSyncResult ?? current?.lastAnnouncementSyncResult ?? null,
+      latestSmokeSummary: next.latestSmokeSummary ?? current?.latestSmokeSummary ?? null,
+    }
+    systemUpdateOverview.value = merged
+    return merged
+  }
 
   async function fetchSettings(accountId: string) {
     if (!accountId)
@@ -1284,7 +1451,7 @@ export const useSettingStore = defineStore('setting', () => {
 
       const { data } = await api.get('/api/admin/system-update/overview')
       if (data && data.ok && data.data) {
-        systemUpdateOverview.value = data.data
+        mergeSystemUpdateOverview(data.data)
       }
       return data?.data || null
     }
@@ -1298,13 +1465,41 @@ export const useSettingStore = defineStore('setting', () => {
     try {
       const { data } = await api.post('/api/admin/system-update/check')
       if (data && data.ok && data.data) {
-        systemUpdateOverview.value = data.data
+        mergeSystemUpdateOverview(data.data)
         return { ok: true, data: data.data }
       }
       return { ok: false, error: resolveLocalizedError(data?.error, '检查更新失败') }
     }
     catch (e: any) {
       return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '检查更新失败') }
+    }
+  }
+
+  async function syncSystemUpdateAnnouncements(payload: Record<string, any> = {}) {
+    try {
+      const { data } = await api.post('/api/admin/system-update/sync-announcements', payload)
+      if (data && data.ok && data.data) {
+        if (data.data.overview) {
+          mergeSystemUpdateOverview(data.data.overview)
+        }
+        return { ok: true, data: data.data }
+      }
+      return { ok: false, error: resolveLocalizedError(data?.error, '同步公告失败') }
+    }
+    catch (e: any) {
+      return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '同步公告失败') }
+    }
+  }
+
+  async function runSystemUpdatePreflight(payload: Record<string, any> = {}) {
+    try {
+      const { data } = await api.post('/api/admin/system-update/preflight', payload)
+      if (data && data.ok && data.data)
+        return { ok: true, data: data.data as SystemUpdatePreflight }
+      return { ok: false, error: resolveLocalizedError(data?.error, '执行更新预检失败') }
+    }
+    catch (e: any) {
+      return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '执行更新预检失败') }
     }
   }
 
@@ -1341,6 +1536,20 @@ export const useSettingStore = defineStore('setting', () => {
       console.error('获取系统更新任务失败:', e)
       systemUpdateJobs.value = []
       return []
+    }
+  }
+
+  async function fetchSystemUpdateJobDetail(jobId: number | string, params: Record<string, any> = {}) {
+    try {
+      const { data } = await api.get(`/api/admin/system-update/jobs/${encodeURIComponent(String(jobId))}/logs`, {
+        params,
+      })
+      if (data && data.ok && data.data)
+        return { ok: true, data: data.data as SystemUpdateJobDetail }
+      return { ok: false, error: resolveLocalizedError(data?.error, '获取更新任务详情失败') }
+    }
+    catch (e: any) {
+      return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '获取更新任务详情失败') }
     }
   }
 
@@ -1399,6 +1608,20 @@ export const useSettingStore = defineStore('setting', () => {
     }
     catch (e: any) {
       return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '重试更新任务失败') }
+    }
+  }
+
+  async function rollbackSystemUpdateJob(jobId: number | string, payload: Record<string, any> = {}) {
+    try {
+      const { data } = await api.post(`/api/admin/system-update/jobs/${encodeURIComponent(String(jobId))}/rollback`, payload)
+      if (data && data.ok && data.data) {
+        mergeSystemUpdateMutation(data.data)
+        return { ok: true, data: data.data }
+      }
+      return { ok: false, error: resolveLocalizedError(data?.error, '创建回滚任务失败') }
+    }
+    catch (e: any) {
+      return { ok: false, error: resolveLocalizedError(e.response?.data?.error, e.message, '创建回滚任务失败') }
     }
   }
 
@@ -1465,5 +1688,5 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  return { settings, loading, timingLoading, reportLogs, reportLogPagination, reportLogStats, systemUpdateOverview, systemUpdateJobs, fetchSettings, fetchReportLogs, fetchReportLogStats, clearReportLogs, deleteReportLogsByIds, exportReportLogs, saveSettings, saveOfflineConfig, fetchBugReportConfig, saveBugReportConfig, sendBugReportTest, sendReportTest, sendReport, changePassword, fetchTrialCardConfig, fetchThirdPartyApiConfig, saveThirdPartyApiConfig, fetchTimingConfig, saveTimingConfig, fetchClusterConfig, saveClusterConfig, fetchSystemUpdateOverview, checkSystemUpdate, saveSystemUpdateConfig, fetchSystemUpdateJobs, createSystemUpdateJob, retrySystemUpdateJob, retrySystemUpdateBatch, cancelSystemUpdateJob, cancelSystemUpdateBatch, setSystemUpdateNodeDrain }
+  return { settings, loading, timingLoading, reportLogs, reportLogPagination, reportLogStats, systemUpdateOverview, systemUpdateJobs, fetchSettings, fetchReportLogs, fetchReportLogStats, clearReportLogs, deleteReportLogsByIds, exportReportLogs, saveSettings, saveOfflineConfig, fetchBugReportConfig, saveBugReportConfig, sendBugReportTest, sendReportTest, sendReport, changePassword, fetchTrialCardConfig, fetchThirdPartyApiConfig, saveThirdPartyApiConfig, fetchTimingConfig, saveTimingConfig, fetchClusterConfig, saveClusterConfig, fetchSystemUpdateOverview, checkSystemUpdate, syncSystemUpdateAnnouncements, runSystemUpdatePreflight, saveSystemUpdateConfig, fetchSystemUpdateJobs, fetchSystemUpdateJobDetail, createSystemUpdateJob, retrySystemUpdateJob, rollbackSystemUpdateJob, retrySystemUpdateBatch, cancelSystemUpdateJob, cancelSystemUpdateBatch, setSystemUpdateNodeDrain }
 })

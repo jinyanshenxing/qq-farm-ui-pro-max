@@ -1,7 +1,7 @@
 {
   "name": "qq-farm-bot-web",
   "type": "module",
-  "version": "4.5.34",
+  "version": "4.5.35",
   "private": true,
   "scripts": {
     "sync:release-notes": "node ../scripts/utils/sync-help-release-notes.js",
@@ -14,6 +14,7 @@
     "lint": "eslint \"src/**/*.{ts,vue}\" --fix",
     "preview": "vite preview",
     "test:e2e:help-center": "pnpm build:runtime && playwright test e2e/help-center.regression.spec.ts",
+    "test:e2e:system-update": "pnpm build:runtime && playwright test e2e/system-update-announcement-sync.spec.ts e2e/system-update-cluster-flow.spec.ts",
     "test:unit": "node --test --experimental-strip-types __tests__/*.test.mjs",
     "test:regression": "pnpm sync:release-notes && pnpm exec vue-tsc -b --pretty false --force && pnpm test:unit && pnpm build:runtime"
   },

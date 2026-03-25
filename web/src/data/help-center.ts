@@ -86,7 +86,7 @@ export interface HelpReleaseNote {
 }
 
 const CURRENT_HELP_VERSION = 'v4.5.29'
-const CURRENT_HELP_UPDATED_AT = '2026-03-24'
+const CURRENT_HELP_UPDATED_AT = '2026-03-25'
 const helpMarkdownModules = import.meta.glob('../content/help-center/*.md', { import: 'default', query: '?raw' }) as Record<string, () => Promise<string>>
 const helpArticleContentCache = new Map<string, HelpArticleContent>()
 
@@ -240,13 +240,33 @@ const helpArticleTimelineOverrides: Partial<Record<string, HelpArticleTimelineIt
   ],
   'deployment-update-and-recovery': [
     {
+      date: '2026-03-25',
+      version: CURRENT_HELP_VERSION,
+      title: '补齐远程更新前提与代理脚本口径',
+      detail: '明确远程更新只读取已发布版本，并把 repair-deploy、install-update-agent-service 和 smoke 命令收入口径。',
+    },
+    {
       date: '2026-03-11',
       version: 'v4.5.20',
       title: '发布链路进一步归一',
       detail: '本地 Release、Docker 推送和旧服兼容脚本继续围绕新主线调整。',
     },
   ],
+  'deployment-release-and-remote-update': [
+    {
+      date: '2026-03-25',
+      version: CURRENT_HELP_VERSION,
+      title: '新增本地发版到服务器远程更新最短清单',
+      detail: '把本地发版、版本源可见性、宿主机代理和后台更新顺序压缩成一条可执行主线。',
+    },
+  ],
   'system-update-center': [
+    {
+      date: '2026-03-25',
+      version: CURRENT_HELP_VERSION,
+      title: '补齐远程更新前置条件与标准操作顺序',
+      detail: '把版本源、代理在线、脚本刷新和正常更新顺序写成明确步骤，减少只看页面不看宿主机前提的误判。',
+    },
     {
       date: '2026-03-11',
       version: 'v4.5.19',
@@ -299,6 +319,9 @@ const helpArticleMustReadMap: Partial<Record<string, HelpArticleMustReadProfile[
   ],
   'deployment-update-and-recovery': [
     { role: 'admin', reason: '上线、修复和回滚都离不开这篇，是运维必读主文档。' },
+  ],
+  'deployment-release-and-remote-update': [
+    { role: 'admin', reason: '只想沿最短路径完成发版和远程更新时，先看这篇最省时间。' },
   ],
   'system-update-center': [
     { role: 'admin', reason: '当前版本的节点更新、排空和任务编排都围绕这条主线展开。' },
@@ -686,12 +709,24 @@ export function buildHelpRoute(input: {
   article: string
   audience?: HelpArticleAudience | 'recommended'
   section?: string
+  traceId?: string
+  sourcePage?: string
+  sourceRoute?: string
+  sourceContext?: string
 }) {
   const params = new URLSearchParams()
   params.set('article', input.article)
   params.set('audience', input.audience || 'recommended')
   if (input.section)
     params.set('section', input.section)
+  if (input.traceId)
+    params.set('helpTraceId', input.traceId)
+  if (input.sourcePage)
+    params.set('helpSourcePage', input.sourcePage)
+  if (input.sourceRoute)
+    params.set('helpSourceRoute', input.sourceRoute)
+  if (input.sourceContext)
+    params.set('helpSourceContext', input.sourceContext)
   return `/help?${params.toString()}`
 }
 
@@ -934,13 +969,31 @@ export const helpArticles: HelpArticle[] = [
     icon: 'i-carbon-cloud-service-management',
     summary: '基于当前统一部署脚本体系，说明在线首装、离线首装和首启验证方法。',
     tags: ['部署', '安装', 'Docker', 'install-or-update', '首启'],
-    updatedAt: '2026-03-20',
-    version: 'v4.5.25',
+    updatedAt: CURRENT_HELP_UPDATED_AT,
+    version: CURRENT_HELP_VERSION,
     author: 'QQ Farm Bot Team',
     reviewStatus: 'published',
     audience: 'admin',
     relatedRoutes: [
       { label: '高级设置 · 系统更新', to: buildSettingsRoute({ category: 'advanced', advancedSection: 'update', updateTab: 'overview', anchorId: 'settings-update-overview' }) },
+    ],
+  }),
+  createArticle({
+    id: 'deployment-release-and-remote-update',
+    category: '运维部署',
+    title: '从本地发版到服务器远程更新',
+    icon: 'i-carbon-document',
+    summary: '把本地发版、镜像或 Release 发布、服务器代理准备和后台远程更新压成一条最短清单。',
+    tags: ['发版', '远程更新', 'Release', 'Docker', 'update-agent', 'smoke'],
+    updatedAt: CURRENT_HELP_UPDATED_AT,
+    version: CURRENT_HELP_VERSION,
+    author: 'QQ Farm Bot Team',
+    reviewStatus: 'published',
+    audience: 'admin',
+    relatedRoutes: [
+      { label: '更新中心 · 总览配置', to: buildSettingsRoute({ category: 'advanced', advancedSection: 'update', updateTab: 'overview', anchorId: 'settings-update-overview' }) },
+      { label: '帮助 · 更新、修复与回滚', to: buildHelpRoute({ article: 'deployment-update-and-recovery', audience: 'admin' }) },
+      { label: '帮助 · 系统更新中心与集群更新', to: buildHelpRoute({ article: 'system-update-center', audience: 'admin' }) },
     ],
   }),
   createArticle({
@@ -950,8 +1003,8 @@ export const helpArticles: HelpArticle[] = [
     icon: 'i-carbon-upgrade',
     summary: '围绕 update、repair、safe-update 和旧环境兼容脚本梳理标准升级路径。',
     tags: ['更新', '修复', '回滚', 'safe-update', 'repair-deploy', 'farm-bot.sh'],
-    updatedAt: '2026-03-20',
-    version: 'v4.5.25',
+    updatedAt: CURRENT_HELP_UPDATED_AT,
+    version: CURRENT_HELP_VERSION,
     author: 'QQ Farm Bot Team',
     reviewStatus: 'published',
     audience: 'admin',
@@ -967,8 +1020,8 @@ export const helpArticles: HelpArticle[] = [
     icon: 'i-carbon-network-4',
     summary: '解释系统更新中心的总览、任务、节点与更新代理如何配合工作。',
     tags: ['系统更新', '更新中心', '集群', '排空', 'update-agent'],
-    updatedAt: '2026-03-20',
-    version: 'v4.5.25',
+    updatedAt: CURRENT_HELP_UPDATED_AT,
+    version: CURRENT_HELP_VERSION,
     author: 'QQ Farm Bot Team',
     reviewStatus: 'published',
     audience: 'admin',

@@ -155,6 +155,7 @@ backup_bundle() {
         update-agent.sh \
         install-update-agent-service.sh \
         install-or-update.sh \
+        safe-update.sh \
         manual-config-wizard.sh \
         repair-mysql.sh \
         repair-deploy.sh \
@@ -162,6 +163,7 @@ backup_bundle() {
         fresh-install.sh \
         quick-deploy.sh \
         verify-stack.sh \
+        smoke-system-update-center.sh \
         init-db/01-init.sql; do
         if [ -e "${DEPLOY_DIR}/${path}" ]; then
             files+=("${path}")
@@ -228,6 +230,7 @@ sync_bundle() {
         bundle_manual_config_wizard="${SCRIPT_DIR}/manual-config-wizard.sh"
         bundle_stack_layout="${SCRIPT_DIR}/stack-layout.sh"
         bundle_verify_stack="${SCRIPT_DIR}/verify-stack.sh"
+        bundle_system_update_smoke="${SCRIPT_DIR}/smoke-system-update-center.sh"
     elif [ -f "${SCRIPT_DIR}/docker-compose.yml" ] \
         && [ -f "${SCRIPT_DIR}/.env.example" ] \
         && [ -f "${SCRIPT_DIR}/init-db/01-init.sql" ]; then
@@ -247,6 +250,7 @@ sync_bundle() {
         bundle_manual_config_wizard="${bundle_dir}/manual-config-wizard.sh"
         bundle_stack_layout="${bundle_dir}/stack-layout.sh"
         bundle_verify_stack="${bundle_dir}/verify-stack.sh"
+        bundle_system_update_smoke="${bundle_dir}/smoke-system-update-center.sh"
     fi
 
     if [ -n "${bundle_dir}" ]; then
@@ -299,6 +303,11 @@ sync_bundle() {
         else
             download_file "scripts/deploy/verify-stack.sh" "${DEPLOY_DIR}/verify-stack.sh"
         fi
+        if [ -n "${bundle_system_update_smoke}" ] && [ -f "${bundle_system_update_smoke}" ]; then
+            copy_file_if_needed "${bundle_system_update_smoke}" "${DEPLOY_DIR}/smoke-system-update-center.sh"
+        else
+            download_file "scripts/deploy/smoke-system-update-center.sh" "${DEPLOY_DIR}/smoke-system-update-center.sh"
+        fi
     else
         if [ "${PRESERVE_COMPOSE_LAYOUT}" != "1" ]; then
             download_file "deploy/docker-compose.yml" "${DEPLOY_DIR}/docker-compose.yml"
@@ -321,6 +330,7 @@ sync_bundle() {
         download_file "scripts/deploy/manual-config-wizard.sh" "${DEPLOY_DIR}/manual-config-wizard.sh"
         download_file "scripts/deploy/stack-layout.sh" "${DEPLOY_DIR}/stack-layout.sh"
         download_file "scripts/deploy/verify-stack.sh" "${DEPLOY_DIR}/verify-stack.sh"
+        download_file "scripts/deploy/smoke-system-update-center.sh" "${DEPLOY_DIR}/smoke-system-update-center.sh"
     fi
 
     if [ ! -f "${DEPLOY_DIR}/.env" ] && [ -f "${DEPLOY_DIR}/.env.example" ]; then
@@ -340,7 +350,8 @@ sync_bundle() {
         "${DEPLOY_DIR}/repair-deploy.sh" \
         "${DEPLOY_DIR}/fresh-install.sh" \
         "${DEPLOY_DIR}/quick-deploy.sh" \
-        "${DEPLOY_DIR}/verify-stack.sh"
+        "${DEPLOY_DIR}/verify-stack.sh" \
+        "${DEPLOY_DIR}/smoke-system-update-center.sh"
 }
 
 run_db_repair_if_requested() {
@@ -376,6 +387,7 @@ main() {
     echo "安全升级命令: ${DEPLOY_DIR}/safe-update.sh"
     echo "手动修复向导: ${DEPLOY_DIR}/manual-config-wizard.sh"
     echo "安装后核验脚本: ${DEPLOY_DIR}/verify-stack.sh"
+    echo "更新中心 smoke: ${DEPLOY_DIR}/smoke-system-update-center.sh --base-url http://127.0.0.1:9527 --username admin --password '你的管理员密码' --deploy-dir ${DEPLOY_DIR}"
     echo "后台更新代理: ${DEPLOY_DIR}/update-agent.sh --once"
     echo "安装代理常驻服务: ${DEPLOY_DIR}/install-update-agent-service.sh"
     echo "数据库修复命令: ${DEPLOY_DIR}/repair-mysql.sh --backup"

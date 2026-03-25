@@ -49,6 +49,9 @@ const { buildReportHistoryCsv, compareLeaderboardAccounts, buildAdminListenError
 const { registerCommerceRoutes } = require('./admin/commerce-routes');
 const { registerSettingsReportRoutes } = require('./admin/settings-report-routes');
 const { registerBugReportRoutes } = require('./admin/bug-report-routes');
+const { registerHelpCenterObservabilityRoutes } = require('./admin/help-center-observability-routes');
+const { registerHelpCenterAnalyticsRoutes } = require('./admin/help-center-analytics-routes');
+const { registerHelpCenterFeedbackRoutes } = require('./admin/help-center-feedback-routes');
 const { registerAccountReadRoutes, registerLogReadRoutes } = require('./admin/account-read-routes');
 const { registerFriendBlacklistRoutes, registerAccountControlRoutes } = require('./admin/account-control-routes');
 const { registerAnnouncementAdminRoutes } = require('./admin/announcement-admin-routes');
@@ -410,6 +413,9 @@ function startAdminServer(dataProvider) {
             registerAccountSettingsRoutes,
             registerSettingsReportRoutes,
             registerBugReportRoutes,
+            registerHelpCenterObservabilityRoutes,
+            registerHelpCenterAnalyticsRoutes,
+            registerHelpCenterFeedbackRoutes,
             registerAccountReadRoutes,
             registerAccountManagementRoutes,
             registerUserCardRoutes,

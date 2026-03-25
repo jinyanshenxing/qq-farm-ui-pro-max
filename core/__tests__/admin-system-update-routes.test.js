@@ -49,6 +49,17 @@ function createDeps(overrides = {}) {
         authRequired,
         userRequired,
         adminLogger: { error: () => {} },
+        adminOperationLogService: { createAdminOperationLog: async () => null },
+        healthProbeService: {
+            getDependenciesSnapshot: async () => ({
+                ok: true,
+                checkedAt: Date.now(),
+                dependencies: {
+                    mysql: { ok: true, status: 'up', error: '' },
+                    redis: { ok: true, status: 'up', error: '' },
+                },
+            }),
+        },
         version: '4.5.18',
         getSystemUpdateConfigRef: async () => ({
             provider: 'github_release',
@@ -121,22 +132,33 @@ function createDeps(overrides = {}) {
         createUpdateJobRef: async (input) => ({
             id: 7,
             jobKey: 'upd_7',
+            kind: input.kind || 'app_update',
             scope: input.scope,
             strategy: input.strategy,
             status: 'pending',
+            sourceVersion: input.sourceVersion || 'v4.5.18',
             targetVersion: input.targetVersion,
             batchKey: input.batchKey || '',
             createdBy: input.createdBy,
             targetAgentId: input.targetAgentId || '',
             claimAgentId: input.claimAgentId || '',
             drainNodeIds: input.drainNodeIds || [],
+            preflight: input.preflight || null,
+            rollbackPayload: input.rollbackPayload || null,
+            verification: input.verification || null,
+            resultSignature: '',
+            executionPhase: input.executionPhase || 'preflight',
+            payload: input.payload || null,
+            result: input.result || null,
         }),
         updateUpdateJobRef: async (idOrKey, patch) => ({
             id: Number(idOrKey) || 7,
             jobKey: `upd_${idOrKey}`,
+            kind: 'app_update',
             scope: 'app',
             strategy: 'rolling',
             status: patch.status || 'pending',
+            sourceVersion: 'v4.5.18',
             targetVersion: 'v4.5.19',
             batchKey: '',
             createdBy: 'root',
@@ -144,11 +166,29 @@ function createDeps(overrides = {}) {
             claimAgentId: '',
             drainNodeIds: [],
             summaryMessage: patch.summaryMessage || '',
+            preflight: patch.preflight || null,
+            rollbackPayload: patch.rollbackPayload || null,
+            verification: patch.verification || null,
+            resultSignature: '',
+            executionPhase: patch.executionPhase || 'queued',
+            payload: patch.payload || null,
             errorMessage: patch.errorMessage || '',
             result: patch.result || null,
         }),
+        listUpdateJobLogsRef: async () => [],
+        findLatestSuccessfulRollbackCandidateRef: async () => null,
         getDispatcherRef: () => null,
         getAccountsSnapshotRef: async () => ({ accounts: [] }),
+        syncAnnouncementsRef: async () => ({
+            added: 0,
+            updated: 0,
+            skipped: 0,
+            totalParsed: 0,
+            latestVersion: '',
+            sources: {},
+            entries: [],
+        }),
+        getLatestSmokeSummaryRef: async () => null,
         ...overrides,
     };
 }
@@ -169,6 +209,322 @@ test('system update overview route returns current version and cached latest rel
     assert.equal(res.body.data.currentVersion, 'v4.5.18');
     assert.equal(res.body.data.latestRelease.versionTag, 'v4.5.19');
     assert.equal(res.body.data.hasUpdate, true);
+});
+
+test('system update overview route includes latest smoke summary when available', async () => {
+    const { app, routes } = createFakeApp();
+    const deps = createDeps({
+        app,
+        getLatestSmokeSummaryRef: async () => ({
+            status: 'warning',
+            checkedAt: 1742938200000,
+            checkedAtLabel: '2026-03-25 21:30:00',
+            baseUrl: 'http://127.0.0.1:9527',
+            authMode: 'login cookie',
+            targetVersion: 'v4.5.19',
+            targetScope: 'app',
+            targetStrategy: 'rolling',
+            targetAgents: '未指定',
+            verifyTarget: '/opt/qq-farm-current',
+            passCount: 6,
+            warnCount: 1,
+            failCount: 0,
+            passItems: ['更新概览接口可用'],
+            warnItems: ['更新预检返回阻断'],
+            failItems: [],
+            rawFiles: ['04-system-update-overview.json'],
+            reportDir: '/tmp/reports/system-update-smoke/20260325_213000',
+            summaryPath: '/tmp/reports/system-update-smoke/20260325_213000/SUMMARY.md',
+        }),
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'get', '/api/admin/system-update/overview');
+    const res = createResponse();
+    await handler({ currentUser: { role: 'admin' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.data.latestSmokeSummary.status, 'warning');
+    assert.equal(res.body.data.latestSmokeSummary.warnCount, 1);
+    assert.equal(res.body.data.latestSmokeSummary.summaryPath, '/tmp/reports/system-update-smoke/20260325_213000/SUMMARY.md');
+});
+
+test('system update check route includes announcement preview and sync recommendation', async () => {
+    const { app, routes } = createFakeApp();
+    const syncCalls = [];
+    const deps = createDeps({
+        app,
+        syncAnnouncementsRef: async (options = {}) => {
+            syncCalls.push(options);
+            return {
+                added: 2,
+                updated: 1,
+                skipped: 0,
+                totalParsed: 3,
+                latestVersion: 'v4.5.19',
+                sources: { release_cache: 3 },
+                entries: [
+                    {
+                        title: '版本说明 A',
+                        version: 'v4.5.19',
+                        publishDate: '2025-03-10',
+                        summary: 'A summary',
+                        sourceType: 'release_cache',
+                        releaseUrl: 'https://example.com/a',
+                    },
+                ],
+            };
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/check');
+    const res = createResponse();
+    await handler({ currentUser: { role: 'admin', username: 'root' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(syncCalls.length, 1);
+    assert.equal(syncCalls[0].dryRun, true);
+    assert.equal(syncCalls[0].limit, 6);
+    assert.equal(res.body.data.announcementPreview.added, 2);
+    assert.equal(res.body.data.announcementPreview.updated, 1);
+    assert.equal(res.body.data.announcementPreview.entries[0].title, '版本说明 A');
+    assert.deepEqual(res.body.data.syncRecommendation, {
+        suggested: true,
+        reason: '检测到 2 条可新增公告',
+        pendingCount: 3,
+        latestVersion: 'v4.5.19',
+    });
+});
+
+test('system update sync announcements route returns sync result and refreshed overview extras', async () => {
+    const { app, routes } = createFakeApp();
+    const syncCalls = [];
+    const deps = createDeps({
+        app,
+        syncAnnouncementsRef: async (options = {}) => {
+            syncCalls.push(options);
+            if (options.dryRun) {
+                return {
+                    added: 0,
+                    updated: 0,
+                    skipped: 4,
+                    totalParsed: 4,
+                    latestVersion: 'v4.5.19',
+                    sources: { release_cache: 4 },
+                    entries: [],
+                };
+            }
+            return {
+                added: 2,
+                updated: 1,
+                skipped: 1,
+                totalParsed: 4,
+                latestVersion: 'v4.5.19',
+                sources: { release_cache: 4 },
+                entries: [
+                    {
+                        title: '同步公告',
+                        version: 'v4.5.19',
+                        publishDate: '2025-03-10',
+                        summary: 'sync summary',
+                        sourceType: 'release_cache',
+                        releaseUrl: 'https://example.com/sync',
+                    },
+                ],
+            };
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { middleware, handler } = getRouteParts(routes, 'post', '/api/admin/system-update/sync-announcements');
+    assert.deepEqual(middleware, [deps.authRequired, deps.userRequired]);
+
+    const res = createResponse();
+    await handler({ currentUser: { role: 'admin', username: 'operator' }, body: {} }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(syncCalls.length, 2);
+    assert.equal(syncCalls[0].dryRun, false);
+    assert.equal(syncCalls[1].dryRun, true);
+    assert.deepEqual(res.body.data.syncResult, {
+        added: 2,
+        updated: 1,
+        skipped: 1,
+        totalParsed: 4,
+        latestVersion: 'v4.5.19',
+        sources: { release_cache: 4 },
+        sourceStats: { release_cache: 4 },
+        previewCount: 3,
+        entries: [{
+            title: '同步公告',
+            version: 'v4.5.19',
+            publishDate: '2025-03-10',
+            summary: 'sync summary',
+            sourceType: 'release_cache',
+            releaseUrl: 'https://example.com/sync',
+        }],
+    });
+    assert.equal(res.body.data.overview.lastAnnouncementSyncResult.added, 2);
+    assert.equal(res.body.data.overview.syncRecommendation.suggested, false);
+});
+
+test('system update sync announcements route forwards dry-run and markInstalled without persisting sync result', async () => {
+    const { app, routes } = createFakeApp();
+    const syncCalls = [];
+    const deps = createDeps({
+        app,
+        syncAnnouncementsRef: async (options = {}) => {
+            syncCalls.push(options);
+            return {
+                added: 1,
+                updated: 0,
+                skipped: 2,
+                totalParsed: 3,
+                latestVersion: 'v4.5.40',
+                sources: { embedded: 3 },
+                entries: [],
+            };
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/sync-announcements');
+    const res = createResponse();
+    await handler({
+        currentUser: { role: 'admin', username: 'operator' },
+        body: {
+            dryRun: true,
+            limit: 9,
+            sourceTypes: ['embedded'],
+            markInstalled: 'v4.5.40',
+        },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(syncCalls.length, 2);
+    assert.deepEqual(syncCalls[0], {
+        createdBy: 'operator',
+        sourceTypes: ['embedded'],
+        limit: 9,
+        dryRun: true,
+        markInstalled: 'v4.5.40',
+    });
+    assert.equal(syncCalls[1].dryRun, true);
+    assert.equal(res.body.data.syncResult.previewCount, 1);
+    assert.equal(res.body.data.overview.lastAnnouncementSyncResult, null);
+});
+
+test('system update check route degrades gracefully when announcement preview build fails', async () => {
+    const { app, routes } = createFakeApp();
+    const deps = createDeps({
+        app,
+        adminLogger: { error: () => {}, warn: () => {} },
+        syncAnnouncementsRef: async () => {
+            throw new Error('preview unavailable');
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/check');
+    const res = createResponse();
+    await handler({ currentUser: { role: 'admin', username: 'root' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.data.currentVersion, 'v4.5.18');
+    assert.equal(res.body.data.announcementPreview, null);
+    assert.equal(res.body.data.syncRecommendation, null);
+});
+
+test('system update preflight route returns structured blockers', async () => {
+    const { app, routes } = createFakeApp();
+    const deps = createDeps({ app });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/preflight');
+    const res = createResponse();
+    await handler({
+        currentUser: { role: 'admin', username: 'root' },
+        body: {
+            targetVersion: 'v4.5.19',
+            preflightOverride: {
+                minDiskFreeBytes: '9000000000000000',
+            },
+        },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.data.ok, false);
+    assert.ok(res.body.data.blockerCount >= 1);
+    assert.equal(res.body.data.checks.some(item => item.key === 'disk_space'), true);
+});
+
+test('system update job logs route returns detail payload', async () => {
+    const { app, routes } = createFakeApp();
+    const deps = createDeps({
+        app,
+        getUpdateJobByIdRef: async () => ({
+            id: 18,
+            jobKey: 'upd_18',
+            kind: 'app_update',
+            scope: 'app',
+            strategy: 'rolling',
+            status: 'running',
+            sourceVersion: 'v4.5.18',
+            targetVersion: 'v4.5.19',
+            batchKey: '',
+            preserveCurrent: false,
+            requireDrain: false,
+            drainNodeIds: [],
+            note: '',
+            createdBy: 'root',
+            targetAgentId: '',
+            claimAgentId: 'agent-a',
+            progressPercent: 60,
+            summaryMessage: 'pulling image',
+            payload: null,
+            result: { logFile: '/tmp/update.log' },
+            preflight: { ok: true, blockerCount: 0, warningCount: 1, checks: [] },
+            rollbackPayload: { previousVersion: 'v4.5.18' },
+            verification: null,
+            resultSignature: 'sig-1',
+            executionPhase: 'pull_image',
+            errorMessage: '',
+            claimedAt: 0,
+            startedAt: 0,
+            finishedAt: 0,
+            createdAt: 1,
+            updatedAt: 2,
+        }),
+        listUpdateJobLogsRef: async () => ([
+            {
+                id: 91,
+                jobId: 18,
+                phase: 'pull_image',
+                level: 'info',
+                message: 'pull started',
+                payload: null,
+                createdAt: 123,
+            },
+        ]),
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'get', '/api/admin/system-update/jobs/:jobId/logs');
+    const res = createResponse();
+    await handler({
+        currentUser: { role: 'admin', username: 'root' },
+        params: { jobId: '18' },
+        query: {},
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.data.currentPhase, 'pull_image');
+    assert.equal(res.body.data.logFilePath, '/tmp/update.log');
+    assert.equal(res.body.data.logs.length, 1);
+    assert.equal(res.body.data.rollbackPayload.previousVersion, 'v4.5.18');
 });
 
 test('system update overview route returns active batch summary when active job belongs to a batch', async () => {
@@ -345,6 +701,34 @@ test('system update create job route blocks concurrent active jobs by default', 
     assert.equal(res.statusCode, 409);
     assert.equal(res.body.ok, false);
     assert.match(res.body.error, /已有待执行或执行中的更新任务/);
+});
+
+test('system update create job route blocks when preflight has environment blockers', async () => {
+    const { app, routes } = createFakeApp();
+    const deps = createDeps({
+        app,
+        createUpdateJobRef: async () => {
+            throw new Error('createUpdateJobRef should not be called when preflight blocks');
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/jobs');
+    const res = createResponse();
+    await handler({
+        currentUser: { role: 'admin', username: 'root' },
+        body: {
+            targetVersion: 'v4.5.19',
+            preflightOverride: {
+                minDiskFreeBytes: '9000000000000000',
+            },
+        },
+    }, res);
+
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.body.ok, false);
+    assert.match(res.body.error, /更新预检未通过/);
+    assert.equal(res.body.data.preflight.ok, false);
 });
 
 test('system update create job route blocks drain-and-cutover when running assigned accounts would require relogin', async () => {
@@ -568,6 +952,24 @@ test('system update create job route preserves custom target image tags', async 
     const createPayloads = [];
     const deps = createDeps({
         app,
+        getSystemUpdateRuntimeRef: async () => ({
+            lastCheckAt: 0,
+            lastCheckOk: true,
+            lastError: '',
+            activeJobId: 0,
+            activeJobStatus: '',
+            activeJobKey: '',
+            activeTargetVersion: '',
+            agentSummary: [
+                {
+                    nodeId: 'agent-a',
+                    status: 'idle',
+                    updatedAt: Date.now(),
+                    managedNodeIds: ['worker-a'],
+                },
+            ],
+            clusterNodes: [],
+        }),
         createUpdateJobRef: async (input) => {
             createPayloads.push(input);
             return {
@@ -680,6 +1082,104 @@ test('system update create job route fans out cluster update jobs across selecte
     assert.equal(Array.isArray(res.body.data.jobs), true);
     assert.equal(res.body.data.jobs.length, 2);
     assert.equal(res.body.data.batch.total, 2);
+});
+
+test('system update rollback route creates a standard rollback job', async () => {
+    const { app, routes } = createFakeApp();
+    const createPayloads = [];
+    const deps = createDeps({
+        app,
+        getUpdateJobByIdRef: async () => ({
+            id: 88,
+            jobKey: 'upd_88',
+            kind: 'app_update',
+            scope: 'app',
+            strategy: 'rolling',
+            status: 'failed',
+            sourceVersion: 'v4.5.18',
+            targetVersion: 'v4.5.19',
+            batchKey: '',
+            preserveCurrent: false,
+            requireDrain: false,
+            drainNodeIds: [],
+            note: '',
+            createdBy: 'root',
+            targetAgentId: 'agent-a',
+            claimAgentId: 'agent-a',
+            progressPercent: 0,
+            summaryMessage: 'failed',
+            payload: { options: { runVerification: true } },
+            result: null,
+            preflight: null,
+            rollbackPayload: { previousVersion: 'v4.5.18' },
+            verification: null,
+            resultSignature: '',
+            executionPhase: 'verify',
+            errorMessage: 'boom',
+            claimedAt: 0,
+            startedAt: 0,
+            finishedAt: 0,
+            createdAt: 1,
+            updatedAt: 2,
+        }),
+        findLatestSuccessfulRollbackCandidateRef: async () => ({
+            id: 77,
+            jobKey: 'upd_77',
+            sourceVersion: 'v4.5.18',
+            rollbackPayload: { previousVersion: 'v4.5.18' },
+        }),
+        createUpdateJobRef: async (input) => {
+            createPayloads.push(input);
+            return {
+                id: 90,
+                jobKey: 'upd_90',
+                kind: input.kind,
+                scope: input.scope,
+                strategy: input.strategy,
+                status: 'pending',
+                sourceVersion: input.sourceVersion,
+                targetVersion: input.targetVersion,
+                batchKey: '',
+                preserveCurrent: input.preserveCurrent,
+                requireDrain: input.requireDrain,
+                drainNodeIds: input.drainNodeIds || [],
+                note: input.note || '',
+                createdBy: input.createdBy,
+                targetAgentId: input.targetAgentId || '',
+                claimAgentId: '',
+                progressPercent: 0,
+                summaryMessage: input.summaryMessage || '',
+                payload: input.payload || null,
+                result: null,
+                preflight: null,
+                rollbackPayload: input.rollbackPayload || null,
+                verification: null,
+                resultSignature: '',
+                executionPhase: 'preflight',
+                errorMessage: '',
+                claimedAt: 0,
+                startedAt: 0,
+                finishedAt: 0,
+                createdAt: 1,
+                updatedAt: 1,
+            };
+        },
+    });
+    registerSystemUpdateAdminRoutes(deps);
+
+    const { handler } = getRouteParts(routes, 'post', '/api/admin/system-update/jobs/:jobId/rollback');
+    const res = createResponse();
+    await handler({
+        currentUser: { role: 'admin', username: 'root' },
+        params: { jobId: '88' },
+        body: {},
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(createPayloads.length, 1);
+    assert.equal(createPayloads[0].kind, 'rollback_update');
+    assert.equal(createPayloads[0].targetVersion, 'v4.5.18');
+    assert.equal(res.body.data.job.kind, 'rollback_update');
 });
 
 test('system update retry job route clones failed job with original target agent', async () => {

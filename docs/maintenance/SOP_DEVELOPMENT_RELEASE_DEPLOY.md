@@ -221,6 +221,101 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 ./docker/start.sh
 ```
 
+### 8.6 从本地发版到服务器远程更新的最短清单
+
+先记住一个前提：服务器远程更新读取的是已经发布到版本源的版本，不是本地未发布代码。
+
+最短顺序如下：
+
+1. 本地完成最小检查并整理版本号 / 更新日志
+
+```bash
+pnpm install --frozen-lockfile
+pnpm -C web exec vue-tsc --noEmit
+pnpm build:web
+```
+
+2. 推送源码
+
+```bash
+git add -A
+git commit -m "chore: release vX.Y.Z"
+git push origin main
+```
+
+3. 让版本源出现新版本
+
+```bash
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+如果是手工推 Docker 镜像：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t smdk000/qq-farm-bot-ui:vX.Y.Z \
+  -t smdk000/qq-farm-bot-ui:latest \
+  -f core/Dockerfile . --push
+```
+
+4. 服务器准备远程更新脚本和代理
+
+```bash
+cd /opt/qq-farm-current
+bash repair-deploy.sh --backup
+bash install-update-agent-service.sh
+systemctl status qq-farm-update-agent
+```
+
+5. 先跑一次非破坏性 smoke
+
+```bash
+cd /opt/qq-farm-current
+bash smoke-system-update-center.sh \
+  --base-url http://127.0.0.1:9527 \
+  --username admin \
+  --password '你的管理员密码' \
+  --deploy-dir /opt/qq-farm-current
+```
+
+6. 后台进入“系统更新中心”，按“检查更新 -> 同步公告 -> 执行预检 -> 创建任务 -> 跟踪日志”的顺序完成远程更新。
+
+7. 完成后再执行一遍宿主机核验
+
+```bash
+cd /opt/qq-farm-current
+bash verify-stack.sh
+```
+
+### 8.7 更新中心联动检查
+
+发布前建议至少确认以下运行时链路：
+
+- `CHANGELOG.md` 与 release notes 已进入镜像 / release bundle
+- 更新中心执行“检查更新”后可看到版本说明预览
+- 更新中心点击“同步公告”后，公告管理页可立即看到一致结果
+- 新建更新任务时可以先执行 preflight，并在阻断时看到明确原因
+- 更新任务完成后可以看到 phase 日志与 verify 摘要
+- 成功任务具备“创建回滚任务”入口
+
+建议在目标环境执行一遍非破坏性 smoke：
+
+```bash
+cd /opt/qq-farm-current
+bash smoke-system-update-center.sh \
+  --base-url http://127.0.0.1:9527 \
+  --username admin \
+  --password '你的管理员密码' \
+  --deploy-dir /opt/qq-farm-current
+```
+
+说明：
+
+- 该脚本默认只做 API 检查、公告 `dryRun` 预览、preflight 检查和可选的 `verify-stack.sh`
+- 不会直接创建更新任务，也不会实际执行回滚
+- 报告默认输出到 `reports/system-update-smoke/<timestamp>/SUMMARY.md`
+
 ---
 
 ## 九、二进制发布（GitHub Releases）

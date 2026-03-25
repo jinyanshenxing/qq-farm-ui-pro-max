@@ -29,9 +29,21 @@ interface Announcement {
   updatedAt?: string
 }
 
+interface AnnouncementSyncResult {
+  added: number
+  updated: number
+  skipped: number
+  totalParsed: number
+  latestVersion?: string
+  previewCount?: number
+  sourceStats?: Record<string, number>
+  sources?: Record<string, number>
+}
+
 const announcements = ref<Announcement[]>([])
 const loading = ref(false)
 const syncing = ref(false)
+const lastSyncResult = ref<AnnouncementSyncResult | null>(null)
 
 // 当前编辑对象
 const currentEdit = ref<Announcement | null>(null)
@@ -159,13 +171,33 @@ function deleteAnnouncement(id: number) {
   })
 }
 
-function syncFromLog() {
-  showConfirm('是否从系统后端的 Update.log 解析并导入缺失的内容作为公告？', async () => {
+function getSyncSourceEntries(result?: AnnouncementSyncResult | null) {
+  const sourceMap = result?.sourceStats || result?.sources || {}
+  return Object.entries(sourceMap)
+}
+
+function getSyncSourceLabel(sourceType: string) {
+  switch (sourceType) {
+    case 'release_cache':
+      return 'Release 缓存'
+    case 'update_log':
+      return 'Update.log'
+    case 'embedded':
+      return '内置说明'
+    default:
+      return sourceType || '未知来源'
+  }
+}
+
+function syncFromSystemSources() {
+  showConfirm('是否从系统版本源同步公告？这会按统一规则解析 Release 缓存、Update.log 与内置说明，并只补充缺失或可更新的内容。', async () => {
     syncing.value = true
     try {
       const res = await api.post('/api/announcement/sync')
       if (res.data.ok) {
-        showAlert(`同步成功！在 Update.log 共发现 ${res.data.totalParsed} 条系统日志，实际新增插入了 ${res.data.added} 条（已去重）。`)
+        const syncResult = (res.data.data || res.data) as AnnouncementSyncResult
+        lastSyncResult.value = syncResult
+        showAlert(`同步完成：新增 ${syncResult.added || 0} 条，更新 ${syncResult.updated || 0} 条，跳过 ${syncResult.skipped || 0} 条。`)
         await loadAnnouncements()
       }
       else {
@@ -195,16 +227,16 @@ onMounted(() => {
           系统公告管理
         </h1>
         <p class="ui-page-desc">
-          管理系统展示的多个历史版本公告，并允许与物理 Update.log 日志联动。
+          管理系统展示的多个历史版本公告，并允许与统一系统版本源联动同步。
         </p>
       </div>
       <div class="announcement-manager-actions ui-mobile-sticky-panel">
         <div class="ui-page-actions ui-bulk-actions">
           <ContextHelpButton article="admin-console" audience="admin" label="公告帮助" variant="outline" />
           <template v-if="isAdmin && !currentEdit">
-            <BaseButton variant="outline" :loading="syncing" @click="syncFromLog">
+            <BaseButton variant="outline" :loading="syncing" @click="syncFromSystemSources">
               <div class="i-carbon-repo-source-code mr-1.5" />
-              同步 Update.log
+              从版本源同步
             </BaseButton>
             <BaseButton variant="primary" @click="openCreateForm">
               <div class="i-carbon-add mr-1.5" />
@@ -220,8 +252,37 @@ onMounted(() => {
       <p>仅超级管理员可访问该页面</p>
     </div>
 
-    <!-- 编辑表单区块 -->
-    <div v-else-if="currentEdit" class="w-full space-y-6">
+    <template v-else>
+      <div v-if="lastSyncResult && !currentEdit" class="card glass-panel flex flex-col rounded-lg shadow">
+      <div class="announcement-panel-divider px-4 py-3">
+        <h3 class="glass-text-main flex items-center gap-2 text-base font-bold">
+          <div class="i-carbon-data-structured" />
+          最近一次版本源同步
+        </h3>
+      </div>
+      <div class="p-6 space-y-3">
+        <div class="glass-text-muted text-sm leading-6">
+          新增 {{ lastSyncResult.added || 0 }} 条，更新 {{ lastSyncResult.updated || 0 }} 条，跳过 {{ lastSyncResult.skipped || 0 }} 条，共解析 {{ lastSyncResult.totalParsed || 0 }} 条。
+        </div>
+        <div class="glass-text-muted text-xs">
+          最新同步版本：{{ lastSyncResult.latestVersion || '-' }}
+        </div>
+        <div v-if="getSyncSourceEntries(lastSyncResult).length" class="flex flex-wrap gap-2">
+          <BaseBadge
+            v-for="[sourceType, count] in getSyncSourceEntries(lastSyncResult)"
+            :key="sourceType"
+            surface="meta"
+            tone="info"
+            class="rounded-full px-2 py-0.5"
+          >
+            {{ getSyncSourceLabel(sourceType) }} {{ count }}
+          </BaseBadge>
+        </div>
+      </div>
+      </div>
+
+      <!-- 编辑表单区块 -->
+      <div v-if="currentEdit" class="w-full space-y-6">
       <div class="card glass-panel flex flex-col rounded-lg shadow">
         <div class="announcement-panel-divider px-4 py-3">
           <h3 class="glass-text-main flex items-center gap-2 text-base font-bold">
@@ -309,18 +370,18 @@ onMounted(() => {
           </BaseButton>
         </div>
       </div>
-    </div>
+      </div>
 
-    <!-- 列表展示区块 -->
-    <div v-else class="w-full">
-      <div v-if="loading" class="flex items-center justify-center p-12">
-        <div class="announcement-empty-state i-carbon-circle-dash h-8 w-8 animate-spin" />
-      </div>
-      <div v-else-if="announcements.length === 0" class="announcement-empty-state card glass-panel flex flex-col items-center justify-center py-20">
-        <div class="announcement-empty-icon i-carbon-catalog mb-3 text-4xl" />
-        <p>目前没有已发布的记录或可查看的历史版本，试着从日志同步一下？</p>
-      </div>
-      <div v-else class="announcement-list ui-mobile-record-list">
+      <!-- 列表展示区块 -->
+      <div v-else class="w-full">
+        <div v-if="loading" class="flex items-center justify-center p-12">
+          <div class="announcement-empty-state i-carbon-circle-dash h-8 w-8 animate-spin" />
+        </div>
+        <div v-else-if="announcements.length === 0" class="announcement-empty-state card glass-panel flex flex-col items-center justify-center py-20">
+          <div class="announcement-empty-icon i-carbon-catalog mb-3 text-4xl" />
+          <p>目前没有已发布的记录或可查看的历史版本，试着从版本源同步一下？</p>
+        </div>
+        <div v-else class="announcement-list ui-mobile-record-list">
         <article
           v-for="item in announcements"
           :key="item.id"
@@ -386,8 +447,9 @@ onMounted(() => {
             </BaseButton>
           </div>
         </article>
+        </div>
       </div>
-    </div>
+    </template>
 
     <!-- 弹窗回馈 -->
     <ConfirmModal

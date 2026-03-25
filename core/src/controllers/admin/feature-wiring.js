@@ -1,3 +1,6 @@
+const { createAnnouncementRuntime } = require('../../services/announcement-materializer');
+const { createSystemUpdateSmokeSummaryService } = require('../../services/system-update-smoke-report');
+
 function registerAdminFeatureRoutes({
     app,
     webDist,
@@ -99,6 +102,9 @@ function registerAdminFeatureRoutes({
     registerAccountSettingsRoutes,
     registerSettingsReportRoutes,
     registerBugReportRoutes,
+    registerHelpCenterObservabilityRoutes,
+    registerHelpCenterAnalyticsRoutes,
+    registerHelpCenterFeedbackRoutes,
     registerAccountReadRoutes,
     registerAccountManagementRoutes,
     registerUserCardRoutes,
@@ -120,6 +126,18 @@ function registerAdminFeatureRoutes({
         fsRef,
         pathRef,
         baseDir,
+    });
+    const announcementRuntime = createAnnouncementRuntime({
+        fsRef,
+        pathRef,
+        projectRoot: pathRef.join(baseDir, '../../../'),
+        getAnnouncementsRef: getAnnouncements,
+        saveAnnouncementRef: saveAnnouncement,
+    });
+    const smokeSummaryService = createSystemUpdateSmokeSummaryService({
+        fsRef,
+        pathRef,
+        projectRoot: pathRef.join(baseDir, '../../../'),
     });
 
     registerAuthRoutes({
@@ -321,6 +339,28 @@ function registerAdminFeatureRoutes({
         adminLogger,
     });
 
+    registerHelpCenterObservabilityRoutes({
+        app,
+        authRequired,
+        adminLogger,
+        getPool,
+    });
+
+    registerHelpCenterAnalyticsRoutes({
+        app,
+        authRequired,
+        adminLogger,
+        getPool,
+    });
+
+    registerHelpCenterFeedbackRoutes({
+        app,
+        authRequired,
+        adminLogger,
+        getPool,
+        adminOperationLogService,
+    });
+
     registerAccountReadRoutes({
         app,
         getProvider,
@@ -388,6 +428,7 @@ function registerAdminFeatureRoutes({
         saveAnnouncement,
         deleteAnnouncement,
         parseUpdateLog,
+        syncAnnouncements: (options) => announcementRuntime.materializeAnnouncements(options),
         getIo,
         store,
     });
@@ -397,9 +438,13 @@ function registerAdminFeatureRoutes({
         authRequired,
         userRequired,
         adminLogger,
+        adminOperationLogService,
+        healthProbeService,
         version,
         getDispatcherRef: getDispatcher,
         getAccountsSnapshotRef: getAccountsSnapshot,
+        syncAnnouncementsRef: (options) => announcementRuntime.materializeAnnouncements(options),
+        getLatestSmokeSummaryRef: () => smokeSummaryService.getLatestSummary(),
     });
 
     registerLogReadRoutes({
@@ -412,6 +457,7 @@ function registerAdminFeatureRoutes({
 
     registerNotificationsRoute({
         app,
+        getNotificationEntries: (options) => announcementRuntime.listNotificationEntries(options),
         parseUpdateLog,
     });
 

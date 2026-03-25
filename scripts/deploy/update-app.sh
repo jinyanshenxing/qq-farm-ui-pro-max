@@ -107,6 +107,62 @@ is_worker_role() {
     [ "$(current_app_role)" = "worker" ]
 }
 
+should_report_update_phase() {
+    [ "${UPDATE_ENABLE_PHASE_REPORTING:-0}" = "1" ] && [ -n "${UPDATE_AGENT_JOB_ID:-}" ]
+}
+
+run_update_bridge() {
+    "${DOCKER[@]}" compose exec -T \
+        -e LOG_LEVEL=error \
+        -e FARM_FALLBACK_CONSOLE_LEVEL=silent \
+        -e UPDATE_AGENT_ID="${UPDATE_AGENT_ID:-}" \
+        "${COMPOSE_APP_SERVICE}" \
+        node scripts/update-agent-bridge.js "$@"
+}
+
+report_update_phase() {
+    local phase="$1"
+    local summary="$2"
+    local progress="${3:-0}"
+    local payload_json="${4:-}"
+
+    if ! should_report_update_phase; then
+        return 0
+    fi
+
+    local command=(
+        set-job-status
+        --agent-id "${UPDATE_AGENT_ID:-}"
+        --managed-node-ids "${UPDATE_AGENT_MANAGED_NODE_IDS:-}"
+        --job-id "${UPDATE_AGENT_JOB_ID}"
+        --status running
+        --phase "${phase}"
+        --summary "${summary}"
+        --log-message "${summary}"
+        --progress "${progress}"
+    )
+    if [ -n "${payload_json}" ]; then
+        command+=(--log-payload-json "${payload_json}")
+    fi
+    run_update_bridge "${command[@]}" >/dev/null 2>&1 || true
+}
+
+write_update_metadata() {
+    local old_image="$1"
+    local new_image="$2"
+
+    if [ -z "${UPDATE_METADATA_FILE:-}" ]; then
+        return 0
+    fi
+
+    cat > "${UPDATE_METADATA_FILE}" <<EOF
+OLD_IMAGE='${old_image//\'/\'\\\'\'}'
+NEW_IMAGE='${new_image//\'/\'\\\'\'}'
+DEPLOY_DIR_REPORTED='${DEPLOY_DIR//\'/\'\\\'\'}'
+CURRENT_LINK_REPORTED='${CURRENT_LINK//\'/\'\\\'\'}'
+EOF
+}
+
 handle_update_error() {
     local exit_code="$?"
 
@@ -823,6 +879,7 @@ sync_bundle() {
         bundle_manual_config_wizard="${SCRIPT_DIR}/manual-config-wizard.sh"
         bundle_stack_layout="${SCRIPT_DIR}/stack-layout.sh"
         bundle_verify_stack="${SCRIPT_DIR}/verify-stack.sh"
+        bundle_system_update_smoke="${SCRIPT_DIR}/smoke-system-update-center.sh"
     elif [ -f "${SCRIPT_DIR}/docker-compose.yml" ] \
         && [ -f "${SCRIPT_DIR}/.env.example" ] \
         && [ -f "${SCRIPT_DIR}/init-db/01-init.sql" ]; then
@@ -842,6 +899,7 @@ sync_bundle() {
         bundle_manual_config_wizard="${bundle_dir}/manual-config-wizard.sh"
         bundle_stack_layout="${bundle_dir}/stack-layout.sh"
         bundle_verify_stack="${bundle_dir}/verify-stack.sh"
+        bundle_system_update_smoke="${bundle_dir}/smoke-system-update-center.sh"
     fi
 
     if [ -n "${bundle_dir}" ]; then
@@ -902,6 +960,11 @@ sync_bundle() {
         else
             download_file "scripts/deploy/verify-stack.sh" "${target_dir}/verify-stack.sh"
         fi
+        if [ -n "${bundle_system_update_smoke}" ] && [ -f "${bundle_system_update_smoke}" ]; then
+            copy_file_if_needed "${bundle_system_update_smoke}" "${target_dir}/smoke-system-update-center.sh"
+        else
+            download_file "scripts/deploy/smoke-system-update-center.sh" "${target_dir}/smoke-system-update-center.sh"
+        fi
     else
         if [ "${PRESERVE_COMPOSE_LAYOUT}" != "1" ]; then
             download_file "deploy/docker-compose.yml" "${target_dir}/docker-compose.yml"
@@ -924,9 +987,10 @@ sync_bundle() {
         download_file "scripts/deploy/manual-config-wizard.sh" "${target_dir}/manual-config-wizard.sh"
         download_file "scripts/deploy/stack-layout.sh" "${target_dir}/stack-layout.sh"
         download_file "scripts/deploy/verify-stack.sh" "${target_dir}/verify-stack.sh"
+        download_file "scripts/deploy/smoke-system-update-center.sh" "${target_dir}/smoke-system-update-center.sh"
     fi
 
-    chmod +x "${target_dir}/update-app.sh" "${target_dir}/repair-mysql.sh" "${target_dir}/repair-deploy.sh" "${target_dir}/fresh-install.sh" "${target_dir}/quick-deploy.sh" "${target_dir}/install-or-update.sh" "${target_dir}/safe-update.sh" "${target_dir}/update-agent.sh" "${target_dir}/install-update-agent-service.sh" "${target_dir}/manual-config-wizard.sh" "${target_dir}/stack-layout.sh" "${target_dir}/verify-stack.sh"
+    chmod +x "${target_dir}/update-app.sh" "${target_dir}/repair-mysql.sh" "${target_dir}/repair-deploy.sh" "${target_dir}/fresh-install.sh" "${target_dir}/quick-deploy.sh" "${target_dir}/install-or-update.sh" "${target_dir}/safe-update.sh" "${target_dir}/update-agent.sh" "${target_dir}/install-update-agent-service.sh" "${target_dir}/manual-config-wizard.sh" "${target_dir}/stack-layout.sh" "${target_dir}/verify-stack.sh" "${target_dir}/smoke-system-update-center.sh"
 }
 
 wait_for_app() {
@@ -1109,7 +1173,7 @@ NODE
 }
 
 compose_pull_with_retry() {
-    local requested_image="${APP_IMAGE:-${OFFICIAL_DOCKERHUB_APP_IMAGE}:4.5.34}"
+    local requested_image="${APP_IMAGE:-${OFFICIAL_DOCKERHUB_APP_IMAGE}:4.5.35}"
 
     if is_truthy "${SKIP_DOCKER_PULL}"; then
         print_info "检测到 SKIP_DOCKER_PULL=${SKIP_DOCKER_PULL}，跳过主程序镜像拉取，直接使用本地镜像。"
@@ -1159,21 +1223,27 @@ main() {
     old_image="$("${DOCKER[@]}" inspect -f '{{.Image}}' "${APP_CONTAINER_NAME}" 2>/dev/null || true)"
 
     print_info "仅更新主程序容器，不会重启 MySQL / Redis / ipad860。"
+    report_update_phase "preflight" "Running update preflight checks" 24
     check_running_login_code_restart_risk
     if [ "${SKIP_DB_REPAIR}" = "1" ] || [ "${SKIP_DB_REPAIR}" = "true" ]; then
         print_warning "检测到 SKIP_DB_REPAIR=${SKIP_DB_REPAIR}，跳过数据库修复步骤。"
     else
+        report_update_phase "stop_stack" "Stopping app for db repair" 42
         stop_app_before_db_repair
         print_info "先执行旧 MySQL 结构修复脚本..."
         bash "${DEPLOY_DIR}/repair-mysql.sh" --deploy-dir "${DEPLOY_DIR}"
     fi
+    report_update_phase "pull_image" "Resolving target image" 56
     compose_pull_with_retry
+    report_update_phase "apply_update" "Applying update with docker compose" 72
     "${DOCKER[@]}" compose up -d --no-deps "${COMPOSE_APP_SERVICE}"
+    report_update_phase "start_stack" "Waiting for app container to become healthy" 84
     wait_for_app 240
     APP_STOPPED_FOR_DB_REPAIR=0
     apply_admin_password_override
 
     new_image="$("${DOCKER[@]}" inspect -f '{{.Image}}' "${APP_CONTAINER_NAME}" 2>/dev/null || true)"
+    write_update_metadata "${old_image}" "${new_image}"
 
     echo ""
     "${DOCKER[@]}" compose ps
@@ -1196,6 +1266,7 @@ main() {
     echo "数据库修复脚本: ${DEPLOY_DIR}/repair-mysql.sh"
     echo "手动修复向导: ${DEPLOY_DIR}/manual-config-wizard.sh"
     echo "安装后核验脚本: ${DEPLOY_DIR}/verify-stack.sh"
+    echo "更新中心 smoke: ${DEPLOY_DIR}/smoke-system-update-center.sh --base-url http://127.0.0.1:9527 --username admin --password '你的管理员密码' --deploy-dir ${DEPLOY_DIR}"
     echo "后台更新代理: ${DEPLOY_DIR}/update-agent.sh --once"
     echo "安装代理常驻服务: ${DEPLOY_DIR}/install-update-agent-service.sh"
     echo ""

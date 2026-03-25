@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS `update_jobs` (
     `summary_message` VARCHAR(500) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
     `payload_json` JSON DEFAULT NULL,
     `result_json` JSON DEFAULT NULL,
+    `preflight_json` JSON DEFAULT NULL,
+    `rollback_payload_json` JSON DEFAULT NULL,
+    `verification_json` JSON DEFAULT NULL,
+    `result_signature` VARCHAR(64) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+    `execution_phase` VARCHAR(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued',
     `error_message` VARCHAR(500) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
     `claimed_at` DATETIME DEFAULT NULL,
     `started_at` DATETIME DEFAULT NULL,
@@ -31,5 +36,7 @@ CREATE TABLE IF NOT EXISTS `update_jobs` (
     KEY `idx_update_jobs_kind_status` (`kind`, `status`),
     KEY `idx_update_jobs_scope_status` (`scope`, `status`),
     KEY `idx_update_jobs_batch_key` (`batch_key`),
-    KEY `idx_update_jobs_target_status` (`target_agent_id`, `status`)
+    KEY `idx_update_jobs_target_status` (`target_agent_id`, `status`),
+    KEY `idx_update_jobs_status_finished` (`status`, `finished_at`),
+    KEY `idx_update_jobs_result_signature` (`result_signature`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

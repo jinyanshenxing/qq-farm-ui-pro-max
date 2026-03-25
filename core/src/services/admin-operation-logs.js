@@ -1,6 +1,6 @@
 const { getPool } = require('./mysql-db');
 
-const VALID_SCOPES = new Set(['users', 'account_ownership', 'runtime', 'accounts']);
+const VALID_SCOPES = new Set(['users', 'account_ownership', 'runtime', 'accounts', 'help_center', 'system_update']);
 const VALID_STATUSES = new Set(['success', 'warning', 'error']);
 
 function normalizeText(value, maxLength = 120) {
@@ -64,7 +64,7 @@ function parseJsonArray(value) {
         if (Array.isArray(value)) {
             return value.map(item => normalizeText(item, 160)).filter(Boolean);
         }
-    } catch (_) {
+    } catch {
         return [];
     }
     return [];

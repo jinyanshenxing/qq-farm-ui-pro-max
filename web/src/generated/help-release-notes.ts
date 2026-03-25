@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.35',
+    date: '2026-03-25',
+    title: '系统更新中心远程更新闭环与 smoke 自检',
+    summary: '公告同步、准备度检查、最近 smoke 摘要、最短发布清单与部署脚本补齐，远程更新从发版到服务器执行形成闭环。',
+  },
+  {
     version: 'v4.5.34',
     date: '2026-03-25',
     title: '帮助中心偏好记忆与高频回访补强',

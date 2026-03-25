@@ -235,17 +235,52 @@ async function mockAppApis(page: Parameters<typeof test.beforeEach>[0]['page']) 
       return route.fulfill(ok({ ok: true, data: { dispatcherStrategy: 'round_robin' } }))
 
     if (path === '/api/admin/system-update/overview') {
+      const now = Date.now()
       return route.fulfill(ok({
         ok: true,
         data: {
           currentVersion: 'v4.5.25',
-          latestVersion: 'v4.5.25',
-          runtime: {
-            lastCheckedAt: new Date().toISOString(),
-            status: 'idle',
-            sourceLabel: 'GitHub Releases',
+          latestRelease: {
+            version: '4.5.25',
+            versionTag: 'v4.5.25',
+            title: 'v4.5.25',
+            publishedAt: now,
+            prerelease: false,
+            notes: '最新版本说明',
+            url: 'https://example.com/releases/v4.5.25',
+            source: 'github',
+            assets: [],
+          },
+          hasUpdate: false,
+          comparison: 0,
+          releaseCache: {
+            checkedAt: now,
+            source: 'https://api.github.com/repos/smdk000/qq-farm-ui-pro-max/releases/latest',
+            etag: 'demo-etag',
             lastError: '',
+            latestRelease: {
+              version: '4.5.25',
+              versionTag: 'v4.5.25',
+              title: 'v4.5.25',
+              publishedAt: now,
+              prerelease: false,
+              notes: '最新版本说明',
+              url: 'https://example.com/releases/v4.5.25',
+              source: 'github',
+              assets: [],
+            },
+            releases: [],
+          },
+          runtime: {
+            lastCheckAt: now,
+            lastCheckOk: true,
+            lastError: '',
+            activeJobId: 0,
+            activeJobStatus: '',
+            activeJobKey: '',
+            activeTargetVersion: '',
             agentSummary: [],
+            clusterNodes: [],
           },
           config: {
             provider: 'github_release',
@@ -261,10 +296,45 @@ async function mockAppApis(page: Parameters<typeof test.beforeEach>[0]['page']) 
             agentMode: 'db_polling',
             agentPollIntervalSec: 15,
             defaultDrainNodeIds: [],
+            maintenanceWindow: '',
+            autoSyncAnnouncements: true,
+            autoRunVerification: true,
+            promptRollbackOnFailure: true,
+            defaultLogTailLines: 80,
           },
-          drainCutoverReadiness: { canDrainCutover: true, blockers: [] },
-          agents: [],
-          clusterNodes: [],
+          activeJob: null,
+          activeBatch: null,
+          latestSmokeSummary: {
+            status: 'warning',
+            checkedAt: now,
+            checkedAtLabel: '2026-03-25 21:30:00',
+            baseUrl: 'http://127.0.0.1:9527',
+            authMode: 'login cookie',
+            targetVersion: 'v4.5.25',
+            targetScope: 'app',
+            targetStrategy: 'rolling',
+            targetAgents: '未指定',
+            verifyTarget: '/opt/qq-farm-current',
+            passCount: 6,
+            warnCount: 1,
+            failCount: 0,
+            passItems: ['更新概览接口可用：当前 v4.5.25，最新 v4.5.25。'],
+            warnItems: ['更新预检返回阻断：阻断 1 项，提醒 0 项。'],
+            failItems: [],
+            rawFiles: ['04-system-update-overview.json', '07-system-update-preflight.json'],
+            reportDir: '/opt/qq-farm-current/reports/system-update-smoke/20260325_213000',
+            summaryPath: '/opt/qq-farm-current/reports/system-update-smoke/20260325_213000/SUMMARY.md',
+          },
+          drainCutoverReadiness: {
+            checkedAt: now,
+            canDrainCutover: true,
+            targetNodeIds: [],
+            runningAccountCount: 0,
+            targetedRunningAccountCount: 0,
+            blockerCount: 0,
+            reloginRequiredCount: 0,
+            blockers: [],
+          },
         },
       }))
     }
@@ -342,6 +412,49 @@ test('supports article switching and full-text search', async ({ page }) => {
   await page.locator('.help-result-card').filter({ hasText: '系统更新中心与集群更新' }).click()
   await expect(page.locator('.help-hero__title')).toHaveText('系统更新中心与集群更新')
   await expect(page).toHaveURL(/article=system-update-center/)
+
+  await page.locator('#help-search-input').fill('远程更新')
+  const remoteUpdateResultTitle = page.locator('.help-result-card__title').filter({ hasText: '从本地发版到服务器远程更新' })
+  await expect(remoteUpdateResultTitle).toHaveCount(1)
+  await expect(remoteUpdateResultTitle.first()).toBeVisible()
+})
+
+test('supports release-to-remote-update checklist article', async ({ page }) => {
+  await page.goto('/help?article=deployment-release-and-remote-update&audience=admin', { waitUntil: 'domcontentloaded' })
+  await dismissBlockingDialogs(page)
+
+  await expect(page.locator('.help-hero__title')).toHaveText('从本地发版到服务器远程更新')
+  await expect(page.getByText('远程更新只会读取已经发布到版本源的版本')).toBeVisible()
+  await expect(page.locator('.help-route-chip').filter({ hasText: '更新中心 · 总览配置' })).toBeVisible()
+})
+
+test('surfaces quick release checklist help in system update settings', async ({ page }) => {
+  await page.goto('/settings?category=advanced&advancedSection=update&updateTab=overview#settings-update-overview', { waitUntil: 'domcontentloaded' })
+  await dismissBlockingDialogs(page)
+
+  await expect(page.getByText('远程更新准备度')).toBeVisible()
+  await expect(page.getByText('发布版本源')).toBeVisible()
+  await expect(page.getByText('更新代理心跳')).toBeVisible()
+  await expect(page.getByText('未检测到在线更新代理')).toBeVisible()
+  await expect(page.getByText('最近 smoke 联动检查')).toBeVisible()
+  await expect(page.getByText('通过 6 · 提醒 1 · 失败 0')).toBeVisible()
+  await expect(page.getByText('更新预检返回阻断：阻断 1 项，提醒 0 项。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制重跑 smoke 命令' })).toBeVisible()
+
+  await expect(page.getByRole('button', { name: '复制修复命令' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制代理安装命令' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制 smoke 命令' })).toBeVisible()
+
+  await page.getByRole('button', { name: '复制 smoke 命令' }).click()
+  await expect.poll(async () => page.evaluate(() => navigator.clipboard.readText())).toContain('smoke-system-update-center.sh')
+
+  const checklistButton = page.getByRole('button', { name: '最短发布清单' }).first()
+  await expect(checklistButton).toBeVisible()
+  await checklistButton.click()
+
+  await expect(page).toHaveURL(/article=deployment-release-and-remote-update/)
+  await expect.poll(() => decodeURIComponent(page.url())).toContain(`section=${helpSectionId('最短发布清单')}`)
+  await expect(page.locator('.help-hero__title')).toHaveText('从本地发版到服务器远程更新')
 })
 
 test('supports command copy and governance task copy', async ({ page }) => {

@@ -2,19 +2,22 @@
 
 <script setup lang="ts">
 import type { LoginBackgroundPreset } from '@/constants/ui-appearance'
-import type { BugReportConfig, ReportLogEntry, SystemUpdateBatchSummary, SystemUpdateClusterNode, SystemUpdateConfig, SystemUpdateDrainCutoverBlocker, SystemUpdateDrainCutoverReadiness, SystemUpdateJob, SystemUpdateOverview, SystemUpdateRuntimeAgent } from '@/stores/setting'
+import type { BugReportConfig, ReportLogEntry, SystemUpdateAnnouncementPreview, SystemUpdateBatchSummary, SystemUpdateClusterNode, SystemUpdateConfig, SystemUpdateDrainCutoverBlocker, SystemUpdateDrainCutoverReadiness, SystemUpdateJob, SystemUpdateJobDetail, SystemUpdateOverview, SystemUpdatePreflight, SystemUpdateRuntimeAgent, SystemUpdateSmokeSummary } from '@/stores/setting'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api' // Apply config from server if possible
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import ContextHelpButton from '@/components/help/ContextHelpButton.vue'
+import SystemUpdateBatchDetail from '@/components/settings/SystemUpdateBatchDetail.vue'
+import SystemUpdateJobDetailPanel from '@/components/settings/SystemUpdateJobDetailPanel.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import BaseTooltip from '@/components/ui/BaseTooltip.vue'
+import { useCopyInteraction } from '@/composables/use-copy-interaction'
 import { useViewPreferenceSync } from '@/composables/use-view-preference-sync'
 import { getThemeAppearanceConfig, getThemeBackgroundPreset, getThemeOption, getThemeWorkspaceVisualPreset, getWorkspaceAppearanceConfig, getWorkspaceVisualPreset, LOGIN_BACKGROUND_PRESETS, THEME_OPTIONS, UI_BACKGROUND_SCOPE_OPTIONS, UI_WORKSPACE_VISUAL_PRESETS } from '@/constants/ui-appearance'
 import { createHelpAnchorId } from '@/data/help-articles'
@@ -262,7 +265,35 @@ interface QqFriendDiagnosticsSnapshot {
   }>
 }
 
+interface SystemUpdateRemoteReadinessItem {
+  key: string
+  label: string
+  tone: 'success' | 'warning' | 'danger'
+  stateLabel: string
+  summary: string
+  detail: string
+}
+
 const QQ_FRIEND_DIAGNOSTICS_APPID = '1112386029'
+const SYSTEM_UPDATE_AGENT_OFFLINE_THRESHOLD_MS = 120 * 1000
+const SYSTEM_UPDATE_SMOKE_STALE_MS = 3 * 24 * 60 * 60 * 1000
+const SYSTEM_UPDATE_REPAIR_DEPLOY_COMMAND = [
+  'cd /opt/qq-farm-current',
+  'bash repair-deploy.sh --backup',
+].join('\n')
+const SYSTEM_UPDATE_INSTALL_AGENT_COMMAND = [
+  'cd /opt/qq-farm-current',
+  'bash install-update-agent-service.sh',
+  'systemctl status qq-farm-update-agent',
+].join('\n')
+const SYSTEM_UPDATE_SMOKE_COMMAND = [
+  'cd /opt/qq-farm-current',
+  'bash smoke-system-update-center.sh \\',
+  '  --base-url http://127.0.0.1:9527 \\',
+  '  --username admin \\',
+  "  --password '你的管理员密码' \\",
+  '  --deploy-dir /opt/qq-farm-current',
+].join('\n')
 
 function loadReportHistoryViewPreferences(): typeof DEFAULT_REPORT_HISTORY_VIEW_STATE {
   const fallback = DEFAULT_REPORT_HISTORY_VIEW_STATE
@@ -305,6 +336,10 @@ const friendStore = useFriendStore()
 const toast = useToastStore()
 const route = useRoute()
 const router = useRouter()
+const { copiedControlKey, copyText: copyWithFeedback } = useCopyInteraction({
+  successTitle: '运维命令已复制',
+  failureMessage: '复制失败，请手动复制命令',
+})
 const reportHistoryViewPrefs = loadReportHistoryViewPreferences()
 
 const { settings, loading, reportLogs, reportLogPagination, reportLogStats, systemUpdateOverview, systemUpdateJobs } = storeToRefs(settingStore)
@@ -697,6 +732,18 @@ const settingsHelpAudience = computed(() => {
   return activeSettingsPrimaryCategory.value === 'advanced' ? 'admin' : 'recommended'
 })
 
+const showSystemUpdateChecklistHelpEntry = computed(() => {
+  return activeSettingsPrimaryCategory.value === 'advanced' && activeAdvancedDetailSection.value === 'update'
+})
+
+const systemUpdateChecklistHelpSectionId = computed(() => {
+  return createHelpAnchorId('最短发布清单')
+})
+
+const systemUpdateUpdateRecoveryHelpSectionId = computed(() => {
+  return createHelpAnchorId('标准更新')
+})
+
 const settingsHelpSectionId = computed(() => {
   if (activeSettingsPrimaryCategory.value === 'common')
     return createHelpAnchorId('常用设置')
@@ -1035,11 +1082,17 @@ const platformCapabilities = ref<PlatformCapabilitiesSnapshot>(JSON.parse(JSON.s
 const platformCapabilitiesLoading = ref(false)
 const platformCapabilitiesSaving = ref(false)
 const systemUpdateChecking = ref(false)
+const systemUpdateAnnouncementSyncing = ref(false)
+const systemUpdatePreflighting = ref(false)
 const systemUpdateSaving = ref(false)
 const systemUpdateLaunching = ref(false)
 const systemUpdateNodeMutatingId = ref('')
 const systemUpdateRetryingKey = ref('')
 const systemUpdateCancellingKey = ref('')
+const systemUpdateRollingBackKey = ref('')
+const systemUpdateJobDetailLoading = ref(false)
+const systemUpdateJobDetail = ref<SystemUpdateJobDetail | null>(null)
+const systemUpdatePreflightSnapshot = ref<SystemUpdatePreflight | null>(null)
 const systemHealthLoading = ref(false)
 const systemHealthError = ref('')
 const systemHealthSnapshot = ref<SystemSettingsHealthSnapshot | null>(null)
@@ -1066,6 +1119,11 @@ const systemUpdateConfig = ref<SystemUpdateConfig>({
   agentMode: 'db_polling',
   agentPollIntervalSec: 15,
   defaultDrainNodeIds: [],
+  maintenanceWindow: '',
+  autoSyncAnnouncements: false,
+  autoRunVerification: true,
+  promptRollbackOnFailure: true,
+  defaultLogTailLines: 80,
 })
 const systemUpdateDraft = ref({
   targetVersion: '',
@@ -1073,6 +1131,10 @@ const systemUpdateDraft = ref({
   strategy: 'rolling',
   preserveCurrent: false,
   requireDrain: false,
+  syncAnnouncements: false,
+  runVerification: true,
+  allowAutoRollback: false,
+  includeDeployTemplates: true,
   note: '',
   targetAgentIdsText: '',
   drainNodeIdsText: '',
@@ -1661,9 +1723,77 @@ const systemUpdateLatestVersionLabel = computed(() => systemUpdateOverview.value
 const systemUpdateCurrentVersionLabel = computed(() => systemUpdateOverview.value?.currentVersion || '未获取')
 const systemUpdateLastCheckLabel = computed(() => formatTimestamp(systemUpdateOverview.value?.runtime?.lastCheckAt || systemUpdateOverview.value?.releaseCache?.checkedAt))
 const systemUpdateSourceLabel = computed(() => systemUpdateOverview.value?.releaseCache?.source || '未配置')
+const systemUpdateLatestReleaseNotes = computed(() => String(systemUpdateOverview.value?.latestRelease?.notes || '').trim())
+const systemUpdateLatestReleaseAssets = computed(() => systemUpdateOverview.value?.latestRelease?.assets || [])
+const systemUpdateAnnouncementPreview = computed<SystemUpdateAnnouncementPreview | null>(() => systemUpdateOverview.value?.announcementPreview || null)
+const systemUpdateLastAnnouncementSyncResult = computed<SystemUpdateAnnouncementPreview | null>(() => systemUpdateOverview.value?.lastAnnouncementSyncResult || null)
+const systemUpdateLatestSmokeSummary = computed<SystemUpdateSmokeSummary | null>(() => systemUpdateOverview.value?.latestSmokeSummary || null)
+const systemUpdateSmokeSummaryStale = computed(() => {
+  const checkedAt = Number(systemUpdateLatestSmokeSummary.value?.checkedAt || 0)
+  return checkedAt > 0 && (Date.now() - checkedAt) > SYSTEM_UPDATE_SMOKE_STALE_MS
+})
+const systemUpdateSmokeSummaryTone = computed<'success' | 'warning' | 'danger'>(() => {
+  const summary = systemUpdateLatestSmokeSummary.value
+  if (!summary)
+    return 'warning'
+  if ((summary.failCount || 0) > 0)
+    return 'danger'
+  if ((summary.warnCount || 0) > 0 || systemUpdateSmokeSummaryStale.value)
+    return 'warning'
+  return 'success'
+})
+const systemUpdateSmokeSummaryStateLabel = computed(() => {
+  const summary = systemUpdateLatestSmokeSummary.value
+  if (!summary)
+    return '未执行'
+  if ((summary.failCount || 0) > 0)
+    return '存在失败'
+  if (systemUpdateSmokeSummaryStale.value)
+    return '报告较旧'
+  if ((summary.warnCount || 0) > 0)
+    return '有提醒'
+  return '已通过'
+})
+const systemUpdateSmokeSummaryHighlightLines = computed(() => {
+  const summary = systemUpdateLatestSmokeSummary.value
+  if (!summary)
+    return []
+  if (summary.failItems?.length)
+    return summary.failItems.slice(0, 3)
+  if (summary.warnItems?.length)
+    return summary.warnItems.slice(0, 3)
+  if (summary.passItems?.length)
+    return summary.passItems.slice(0, 3)
+  return []
+})
+const systemUpdateSyncRecommendation = computed(() => systemUpdateOverview.value?.syncRecommendation || null)
 const activeSystemUpdateJob = computed<SystemUpdateJob | null>(() => systemUpdateOverview.value?.activeJob || systemUpdateJobs.value[0] || null)
+const activeSystemUpdateJobDetail = computed<SystemUpdateJobDetail | null>(() => {
+  if (!activeSystemUpdateJob.value)
+    return systemUpdateJobDetail.value
+  if (systemUpdateJobDetail.value?.job?.id === activeSystemUpdateJob.value.id)
+    return systemUpdateJobDetail.value
+  return {
+    job: activeSystemUpdateJob.value,
+    logs: [],
+    currentPhase: activeSystemUpdateJob.value.executionPhase || activeSystemUpdateJob.value.status || 'queued',
+    preflight: activeSystemUpdateJob.value.preflight || systemUpdatePreflightSnapshot.value,
+    verification: activeSystemUpdateJob.value.verification || null,
+    rollbackPayload: activeSystemUpdateJob.value.rollbackPayload || null,
+    resultSignature: activeSystemUpdateJob.value.resultSignature || '',
+    logFilePath: String(activeSystemUpdateJob.value.result?.logFile || '').trim(),
+    latestLogId: 0,
+  }
+})
 const systemUpdateDrainCutoverReadiness = computed<SystemUpdateDrainCutoverReadiness | null>(() => systemUpdateOverview.value?.drainCutoverReadiness || null)
 const systemUpdateDrainCutoverBlockers = computed<SystemUpdateDrainCutoverBlocker[]>(() => systemUpdateDrainCutoverReadiness.value?.blockers || [])
+const systemUpdateLatestPreflight = computed<SystemUpdatePreflight | null>(() => (
+  systemUpdatePreflightSnapshot.value
+  || activeSystemUpdateJobDetail.value?.preflight
+  || activeSystemUpdateJob.value?.preflight
+  || null
+))
+const systemUpdatePreflightChecks = computed(() => systemUpdateLatestPreflight.value?.checks || [])
 const activeSystemUpdateBatch = computed<SystemUpdateBatchSummary | null>(() => {
   const overviewBatch = systemUpdateOverview.value?.activeBatch || null
   if (overviewBatch)
@@ -1712,6 +1842,7 @@ const activeSystemUpdateBatch = computed<SystemUpdateBatchSummary | null>(() => 
     latestJobKey: primaryJob.jobKey,
     latestSummaryMessage: primaryJob.summaryMessage,
     latestErrorMessage: primaryJob.errorMessage,
+    executionPhase: primaryJob.executionPhase || primaryJob.status || 'queued',
     createdAt: Math.min(...batchJobs.map(job => job.createdAt || Date.now())),
     updatedAt: Math.max(...batchJobs.map(job => job.updatedAt || job.createdAt || 0)),
   }
@@ -1721,6 +1852,163 @@ const systemUpdateClusterNodes = computed<SystemUpdateClusterNode[]>(() => syste
 const clusterConnectedNodeCount = computed(() => systemUpdateClusterNodes.value.filter(node => node.connected).length)
 const clusterDrainingNodeCount = computed(() => systemUpdateClusterNodes.value.filter(node => node.draining).length)
 const clusterAgentErrorCount = computed(() => systemUpdateAgents.value.filter(agent => agent.status === 'error').length)
+const systemUpdateRemoteReadinessItems = computed<SystemUpdateRemoteReadinessItem[]>(() => {
+  const overview = systemUpdateOverview.value
+  const config = overview?.config || systemUpdateConfig.value
+  const provider = String(config?.provider || '').trim()
+  const releaseSource = String(overview?.releaseCache?.source || '').trim()
+  const latestRelease = overview?.latestRelease || null
+  const latestVersion = String(latestRelease?.versionTag || '').trim()
+  const lastCheckAt = Number(overview?.runtime?.lastCheckAt || overview?.releaseCache?.checkedAt || 0)
+  const lastError = String(overview?.runtime?.lastError || '').trim()
+  const repoPath = [config?.githubOwner, config?.githubRepo].filter(Boolean).join('/')
+  const sourceConfigured = (
+    (provider === 'github_release' && !!repoPath)
+    || (provider === 'manifest_url' && !!String(config?.manifestUrl || '').trim())
+    || (provider === 'release_api_url' && !!String(config?.releaseApiUrl || '').trim())
+  )
+  const sourceSummary = provider === 'github_release'
+    ? (repoPath ? `GitHub Releases · ${repoPath}` : 'GitHub Releases 仓库未配齐')
+    : provider === 'manifest_url'
+      ? (String(config?.manifestUrl || '').trim() || 'Manifest URL 未配置')
+      : provider === 'release_api_url'
+        ? (String(config?.releaseApiUrl || '').trim() || 'Release API URL 未配置')
+        : '尚未配置版本源'
+
+  const agents = systemUpdateAgents.value
+  const onlineAgents = agents.filter((agent) => {
+    const updatedAt = Number(agent.updatedAt || 0)
+    return agent.status !== 'error'
+      && updatedAt > 0
+      && (Date.now() - updatedAt) <= SYSTEM_UPDATE_AGENT_OFFLINE_THRESHOLD_MS
+  })
+  const offlineAgents = agents.filter(agent => !onlineAgents.includes(agent))
+  const latestAgentHeartbeatAt = onlineAgents.reduce((latestAt, agent) => {
+    return Math.max(latestAt, Number(agent.updatedAt || 0))
+  }, 0)
+  const currentScope = String(systemUpdateDraft.value.scope || config?.preferredScope || 'app').trim() || 'app'
+  const nodes = systemUpdateClusterNodes.value
+  const connectedNodeCount = nodes.filter(node => node.connected).length
+  const preflight = systemUpdateLatestPreflight.value
+  const preflightChecked = !!(preflight?.checkedAt || preflight?.checks?.length)
+
+  return [
+    {
+      key: 'release_source',
+      label: '发布版本源',
+      tone: sourceConfigured ? 'success' : 'danger',
+      stateLabel: sourceConfigured ? '已配置' : '待配置',
+      summary: sourceSummary,
+      detail: sourceConfigured
+        ? (releaseSource ? `当前检查源：${releaseSource}` : '保存配置后执行一次“检查更新”，这里会显示实际拉取来源。')
+        : '先补齐版本源配置，否则服务器无法看到你刚发布的新版本。',
+    },
+    {
+      key: 'release_visibility',
+      label: '最新版本检查',
+      tone: lastError
+        ? 'danger'
+        : latestVersion
+          ? 'success'
+          : 'warning',
+      stateLabel: lastError
+        ? '检查失败'
+        : latestVersion
+          ? '已检查'
+          : '待检查',
+      summary: lastError
+        ? `最近检查失败：${lastError}`
+        : latestVersion
+          ? (overview?.hasUpdate
+              ? `已检测到可更新版本 ${latestVersion}`
+              : `当前已是最新版本 ${latestVersion}`)
+          : '还没有最新版本信息',
+      detail: lastError
+        ? '先修正版本源或网络问题，再重新执行“检查更新”。'
+        : latestVersion
+          ? `最近检查时间：${formatTimestamp(lastCheckAt)}`
+          : '如果刚发版，这一步一定要先做，否则“系统更新中心”不会出现新版本。',
+    },
+    {
+      key: 'host_agent',
+      label: '更新代理心跳',
+      tone: onlineAgents.length > 0
+        ? (offlineAgents.length > 0 ? 'warning' : 'success')
+        : 'danger',
+      stateLabel: onlineAgents.length > 0
+        ? (offlineAgents.length > 0 ? '部分离线' : '在线')
+        : '未就绪',
+      summary: onlineAgents.length > 0
+        ? `在线代理 ${onlineAgents.length} / ${agents.length || onlineAgents.length}`
+        : '未检测到在线更新代理',
+      detail: onlineAgents.length > 0
+        ? `最近在线心跳：${formatTimestamp(latestAgentHeartbeatAt)}${offlineAgents.length > 0 ? `；另有 ${offlineAgents.length} 个代理心跳超时或状态异常。` : '。'}`
+        : '先在服务器执行 install-update-agent-service.sh，并确认 systemctl status qq-farm-update-agent 正常。',
+    },
+    {
+      key: 'cluster_scope',
+      label: '托管节点与更新范围',
+      tone: nodes.length === 0
+        ? (currentScope === 'app' ? 'success' : 'warning')
+        : connectedNodeCount > 0
+          ? (connectedNodeCount === nodes.length ? 'success' : 'warning')
+          : (currentScope === 'app' ? 'warning' : 'danger'),
+      stateLabel: nodes.length === 0
+        ? (currentScope === 'app' ? '单机可用' : '需补节点')
+        : connectedNodeCount > 0
+          ? (connectedNodeCount === nodes.length ? '节点在线' : '部分离线')
+          : '节点离线',
+      summary: nodes.length === 0
+        ? (currentScope === 'app' ? '当前没有托管集群节点，单机远程更新可直接执行。' : `当前范围是 ${currentScope}，但还没有托管节点。`)
+        : `托管节点在线 ${connectedNodeCount} / ${nodes.length}，当前范围 ${currentScope}`,
+      detail: nodes.length === 0
+        ? (currentScope === 'app'
+            ? '如果只更新当前宿主机，不需要额外节点；如要做 worker / cluster 更新，再补托管节点。'
+            : '如果要做 worker / cluster 更新，先让代理上报 managedNodeIds 并保持节点在线。')
+        : `${clusterDrainingNodeCount.value > 0 ? `其中 ${clusterDrainingNodeCount.value} 个节点处于排空中；` : ''}如需滚动或排空切换，建议先确认节点都已恢复接流。`,
+    },
+    {
+      key: 'preflight',
+      label: '最近独立预检',
+      tone: preflightChecked
+        ? (preflight?.blockerCount
+            ? 'danger'
+            : ((preflight?.warningCount || 0) > 0 ? 'warning' : 'success'))
+        : 'warning',
+      stateLabel: preflightChecked
+        ? (preflight?.blockerCount
+            ? '存在阻断'
+            : ((preflight?.warningCount || 0) > 0 ? '有提醒' : '已通过'))
+        : '未执行',
+      summary: preflightChecked
+        ? (preflight?.blockerCount
+            ? `发现 ${preflight.blockerCount} 个阻断项`
+            : `最近预检通过${(preflight?.warningCount || 0) > 0 ? `，含 ${preflight?.warningCount || 0} 项提醒` : ''}`)
+        : '正式创建任务前，建议至少跑一次独立预检。',
+      detail: preflightChecked
+        ? (preflight?.blockers?.[0]?.message
+            || preflight?.warnings?.[0]?.message
+            || `检查时间：${formatTimestamp(preflight?.checkedAt)}`)
+        : '它不会创建任务，只会提前发现版本、磁盘、依赖和代理在线性问题。',
+    },
+  ]
+})
+const systemUpdateRemoteReadinessBlockerCount = computed(() => systemUpdateRemoteReadinessItems.value.filter(item => item.tone === 'danger').length)
+const systemUpdateRemoteReadinessWarningCount = computed(() => systemUpdateRemoteReadinessItems.value.filter(item => item.tone === 'warning').length)
+const systemUpdateRemoteReadinessTone = computed<'success' | 'warning' | 'danger'>(() => {
+  if (systemUpdateRemoteReadinessBlockerCount.value > 0)
+    return 'danger'
+  if (systemUpdateRemoteReadinessWarningCount.value > 0)
+    return 'warning'
+  return 'success'
+})
+const systemUpdateRemoteReadinessSummary = computed(() => {
+  if (systemUpdateRemoteReadinessBlockerCount.value > 0)
+    return `还有 ${systemUpdateRemoteReadinessBlockerCount.value} 项阻断需要先处理，建议按卡片里的顺序先补版本源、代理或预检。`
+  if (systemUpdateRemoteReadinessWarningCount.value > 0)
+    return `主链路已基本就绪，但还有 ${systemUpdateRemoteReadinessWarningCount.value} 项建议确认，避免正式更新时临场补救。`
+  return '远程更新主链路已经就绪，可以继续检查更新、同步公告、执行预检并创建任务。'
+})
 const clusterActiveStrategyLabel = computed(() => {
   return clusterStrategyOptions.find(item => item.value === clusterConfig.value.dispatcherStrategy)?.label
     || clusterConfig.value.dispatcherStrategy
@@ -1730,6 +2018,126 @@ const SYSTEM_UPDATE_ACTIVE_STATUSES = ['pending', 'claimed', 'running'] as const
 const SYSTEM_UPDATE_AUTO_REFRESH_MS = 15000
 let systemUpdateAutoRefreshTimer: ReturnType<typeof window.setInterval> | null = null
 let systemUpdateAutoRefreshInFlight = false
+
+function getSystemUpdateAnnouncementSourceLabel(sourceType?: string) {
+  switch (String(sourceType || '').trim()) {
+    case 'release_cache':
+      return 'Release'
+    case 'update_log':
+      return 'Update.log'
+    case 'embedded':
+      return '内置索引'
+    default:
+      return sourceType || '未知来源'
+  }
+}
+
+function summarizeSystemUpdateAnnouncementSources(sources?: Record<string, number> | null) {
+  if (!sources)
+    return '-'
+
+  const parts = Object.entries(sources)
+    .filter(([, count]) => Number(count) > 0)
+    .map(([key, count]) => `${getSystemUpdateAnnouncementSourceLabel(key)} ${count}`)
+  return parts.length ? parts.join(' · ') : '-'
+}
+
+function formatSystemUpdateAssetSize(size?: number) {
+  const normalized = Number(size) || 0
+  if (normalized <= 0)
+    return '未知大小'
+  if (normalized >= 1024 * 1024 * 1024)
+    return `${(normalized / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  if (normalized >= 1024 * 1024)
+    return `${(normalized / (1024 * 1024)).toFixed(1)} MB`
+  if (normalized >= 1024)
+    return `${Math.round(normalized / 1024)} KB`
+  return `${normalized} B`
+}
+
+function getSystemUpdatePreflightCheckTone(check: SystemUpdatePreflight['checks'][number]) {
+  if (check.blocker)
+    return 'danger'
+  if (check.warning)
+    return 'warning'
+  return 'success'
+}
+
+function getSystemUpdatePhaseLabel(phase?: string) {
+  switch (String(phase || '').trim()) {
+    case 'preflight':
+      return '预检'
+    case 'backup':
+      return '备份'
+    case 'pull_image':
+      return '拉取镜像'
+    case 'stop_stack':
+      return '停栈'
+    case 'apply_update':
+      return '应用更新'
+    case 'start_stack':
+      return '启动服务'
+    case 'verify':
+      return '更新核验'
+    case 'sync_announcements':
+      return '同步公告'
+    case 'rollback':
+      return '回滚'
+    case 'done':
+      return '完成'
+    default:
+      return phase || '待开始'
+  }
+}
+
+async function copySystemUpdateQuickCommand(
+  command: string,
+  successMessage: string,
+  controlKey: string,
+  detail: string,
+) {
+  await copyWithFeedback(command, successMessage, {
+    controlKey,
+    detail,
+    title: '运维命令已复制',
+  })
+}
+
+function copySystemUpdateRepairDeployCommand() {
+  void copySystemUpdateQuickCommand(
+    SYSTEM_UPDATE_REPAIR_DEPLOY_COMMAND,
+    '部署骨架修复命令已复制',
+    'system-update-repair-deploy',
+    '适合旧服务器或脚本不完整场景，执行后会补齐部署辅助脚本。',
+  )
+}
+
+function copySystemUpdateInstallAgentCommand() {
+  void copySystemUpdateQuickCommand(
+    SYSTEM_UPDATE_INSTALL_AGENT_COMMAND,
+    '更新代理安装命令已复制',
+    'system-update-install-agent',
+    '会安装并检查 qq-farm-update-agent，确认后台远程更新具备宿主机执行能力。',
+  )
+}
+
+function copySystemUpdateSmokeCommand() {
+  void copySystemUpdateQuickCommand(
+    SYSTEM_UPDATE_SMOKE_COMMAND,
+    '更新中心 smoke 命令已复制',
+    'system-update-smoke',
+    '这条 smoke 默认只做检查，不会直接创建更新任务或执行回滚。',
+  )
+}
+
+function copySystemUpdateSmokeRerunCommand() {
+  void copySystemUpdateQuickCommand(
+    SYSTEM_UPDATE_SMOKE_COMMAND,
+    '重跑 smoke 命令已复制',
+    'system-update-smoke-rerun',
+    '适合在正式更新前重新跑一遍联动检查，确认远程更新链路仍然可用。',
+  )
+}
 
 function describeWebAssetDir(dir: string | undefined, hasAssets: boolean | undefined, writable: boolean | undefined) {
   const parts = [dir || '-']
@@ -1784,8 +2192,33 @@ function syncSystemUpdateForms(overview?: SystemUpdateOverview | null) {
     scope: next.config?.preferredScope || systemUpdateDraft.value.scope,
     strategy: next.config?.preferredStrategy || systemUpdateDraft.value.strategy,
     requireDrain: next.config?.requireDrain ?? systemUpdateDraft.value.requireDrain,
+    syncAnnouncements: next.config?.autoSyncAnnouncements ?? systemUpdateDraft.value.syncAnnouncements,
+    runVerification: next.config?.autoRunVerification ?? systemUpdateDraft.value.runVerification,
     targetAgentIdsText: systemUpdateDraft.value.targetAgentIdsText,
     drainNodeIdsText: next.config?.defaultDrainNodeIds?.join(',') || systemUpdateDraft.value.drainNodeIdsText,
+  }
+}
+
+async function loadSystemUpdateJobDetail(jobId?: number | string | null, params: Record<string, any> = {}) {
+  if (!jobId) {
+    systemUpdateJobDetail.value = null
+    return
+  }
+  systemUpdateJobDetailLoading.value = true
+  try {
+    const res = await settingStore.fetchSystemUpdateJobDetail(jobId, {
+      limit: systemUpdateConfig.value.defaultLogTailLines || 80,
+      ...params,
+    })
+    if (res.ok && res.data) {
+      systemUpdateJobDetail.value = res.data
+    }
+    else if (!params?.silent) {
+      showAlert(`加载任务详情失败: ${res.error}`, 'danger')
+    }
+  }
+  finally {
+    systemUpdateJobDetailLoading.value = false
   }
 }
 
@@ -1798,6 +2231,9 @@ async function loadSystemUpdateData() {
   ])
   if (overview)
     syncSystemUpdateForms(overview)
+  const activeJobId = overview?.activeJob?.id || systemUpdateOverview.value?.activeJob?.id || systemUpdateJobs.value[0]?.id
+  if (activeJobId)
+    await loadSystemUpdateJobDetail(activeJobId, { limit: 40, silent: true })
 }
 
 function shouldAutoRefreshSystemUpdate() {
@@ -1858,6 +2294,13 @@ function startSystemUpdateAutoRefresh() {
   }, SYSTEM_UPDATE_AUTO_REFRESH_MS)
 }
 
+watch(() => activeSystemUpdateJob.value?.id, (jobId) => {
+  if (jobId)
+    void loadSystemUpdateJobDetail(jobId, { limit: 40, silent: true })
+  else
+    systemUpdateJobDetail.value = null
+}, { immediate: false })
+
 async function checkSystemUpdateNow() {
   systemUpdateChecking.value = true
   try {
@@ -1865,7 +2308,17 @@ async function checkSystemUpdateNow() {
     if (res.ok && res.data) {
       syncSystemUpdateForms(res.data)
       await settingStore.fetchSystemUpdateJobs(8)
-      showAlert(res.data.hasUpdate ? `检测到新版本 ${res.data.latestRelease?.versionTag || ''}` : '当前已经是最新版本')
+      const pendingCount = Number(res.data.syncRecommendation?.pendingCount || 0)
+      if (res.data.hasUpdate) {
+        showAlert(
+          pendingCount > 0
+            ? `检测到新版本 ${res.data.latestRelease?.versionTag || ''}，可同步 ${pendingCount} 条公告`
+            : `检测到新版本 ${res.data.latestRelease?.versionTag || ''}`,
+        )
+      }
+      else {
+        showAlert(pendingCount > 0 ? `当前已是最新版本，但仍有 ${pendingCount} 条公告可同步` : '当前已经是最新版本')
+      }
     }
     else {
       showAlert(`检查更新失败: ${res.error}`, 'danger')
@@ -1873,6 +2326,60 @@ async function checkSystemUpdateNow() {
   }
   finally {
     systemUpdateChecking.value = false
+  }
+}
+
+async function syncSystemUpdateAnnouncementsNow() {
+  systemUpdateAnnouncementSyncing.value = true
+  try {
+    const res = await settingStore.syncSystemUpdateAnnouncements()
+    if (res.ok && res.data) {
+      if (res.data.overview)
+        syncSystemUpdateForms(res.data.overview)
+      const syncResult = res.data.syncResult
+      if (syncResult) {
+        showAlert(`公告同步完成：新增 ${syncResult.added || 0} 条，更新 ${syncResult.updated || 0} 条，跳过 ${syncResult.skipped || 0} 条`)
+      }
+      else {
+        showAlert('公告同步完成')
+      }
+    }
+    else {
+      showAlert(`同步公告失败: ${res.error}`, 'danger')
+    }
+  }
+  finally {
+    systemUpdateAnnouncementSyncing.value = false
+  }
+}
+
+async function runSystemUpdatePreflightNow(showSuccessAlert = true) {
+  systemUpdatePreflighting.value = true
+  try {
+    const res = await settingStore.runSystemUpdatePreflight({
+      targetVersion: systemUpdateDraft.value.targetVersion,
+      scope: systemUpdateDraft.value.scope,
+      strategy: systemUpdateDraft.value.strategy,
+      targetAgentIds: normalizeNodeIdList(systemUpdateDraft.value.targetAgentIdsText),
+      preflightOverride: {},
+    })
+    if (res.ok && res.data) {
+      systemUpdatePreflightSnapshot.value = res.data
+      if (showSuccessAlert) {
+        showAlert(
+          res.data.ok
+            ? `更新预检通过，共 ${res.data.warningCount || 0} 项提醒`
+            : `更新预检未通过，存在 ${res.data.blockerCount || 0} 个阻断项`,
+          res.data.ok ? 'primary' : 'danger',
+        )
+      }
+    }
+    else {
+      showAlert(`执行更新预检失败: ${res.error}`, 'danger')
+    }
+  }
+  finally {
+    systemUpdatePreflighting.value = false
   }
 }
 
@@ -1908,24 +2415,37 @@ async function createSystemUpdateTask() {
       strategy: systemUpdateDraft.value.strategy,
       preserveCurrent: systemUpdateDraft.value.preserveCurrent,
       requireDrain: systemUpdateDraft.value.requireDrain,
+      syncAnnouncements: systemUpdateDraft.value.syncAnnouncements,
+      runVerification: systemUpdateDraft.value.runVerification,
+      allowAutoRollback: systemUpdateDraft.value.allowAutoRollback,
+      includeDeployTemplates: systemUpdateDraft.value.includeDeployTemplates,
       note: systemUpdateDraft.value.note,
       targetAgentIds: normalizeNodeIdList(systemUpdateDraft.value.targetAgentIdsText),
       drainNodeIds: normalizeNodeIdList(systemUpdateDraft.value.drainNodeIdsText),
     }
     const res = await settingStore.createSystemUpdateJob(payload)
     if (res.ok) {
+      systemUpdatePreflightSnapshot.value = res.data?.job?.preflight || null
       await refreshSystemUpdateStatus({ silent: true })
       const createdCount = Number(res.data?.createdCount || (Array.isArray(res.data?.jobs) ? res.data.jobs.length : (res.data?.job ? 1 : 0))) || 1
       showAlert(`更新任务已创建，共 ${createdCount} 个，目标版本 ${payload.targetVersion || '未指定'}`)
     }
     else {
       const readiness = res.data?.drainCutoverReadiness as SystemUpdateDrainCutoverReadiness | undefined
+      const preflight = res.data?.preflight as SystemUpdatePreflight | undefined
+      if (preflight) {
+        systemUpdatePreflightSnapshot.value = preflight
+      }
       if (readiness?.blockerCount) {
         const firstBlocker = readiness.blockers?.[0]
         const blockerLabel = firstBlocker
           ? `${firstBlocker.accountName || firstBlocker.accountId}${firstBlocker.nodeId ? ` @ ${firstBlocker.nodeId}` : ''}`
           : '存在运行中账号'
         showAlert(`创建任务失败: ${res.error}。阻断对象: ${blockerLabel}`, 'danger')
+      }
+      else if (preflight?.blockerCount) {
+        const blockerLabel = preflight.blockers?.[0]?.message || '存在环境阻断项'
+        showAlert(`创建任务失败: ${res.error}。预检阻断: ${blockerLabel}`, 'danger')
       }
       else {
         showAlert(`创建任务失败: ${res.error}`, 'danger')
@@ -1941,7 +2461,7 @@ function describeSystemUpdateJob(job?: SystemUpdateJob | null) {
   if (!job)
     return '暂无任务'
   const progress = Number.isFinite(job.progressPercent) ? `${job.progressPercent}%` : '-'
-  const base = `${job.scope} / ${job.strategy} / ${job.status}`
+  const base = `${job.scope} / ${job.strategy} / ${job.status} / ${getSystemUpdatePhaseLabel(job.executionPhase)}`
   return job.summaryMessage ? `${base} · ${progress} · ${job.summaryMessage}` : `${base} · ${progress}`
 }
 
@@ -1977,7 +2497,7 @@ function describeSystemUpdateBatch(batch?: SystemUpdateBatchSummary | null) {
   if (!batch)
     return '暂无批次任务'
   const parts = [
-    `${batch.scope} / ${batch.strategy} / ${batch.status}`,
+    `${batch.scope} / ${batch.strategy} / ${batch.status} / ${getSystemUpdatePhaseLabel(batch.executionPhase)}`,
     `总计 ${batch.total}`,
     `进度 ${batch.progressPercent}%`,
   ]
@@ -1992,6 +2512,14 @@ function describeSystemUpdateBatch(batch?: SystemUpdateBatchSummary | null) {
 
 function canCancelSystemUpdateJob(job?: SystemUpdateJob | null) {
   return job ? ['pending', 'claimed'].includes(job.status) : false
+}
+
+function canRollbackSystemUpdateJob(job?: SystemUpdateJob | null) {
+  if (!job)
+    return false
+  if (['pending', 'claimed', 'running'].includes(job.status))
+    return false
+  return !!(job.sourceVersion || job.rollbackPayload?.previousVersion)
 }
 
 function getBatchCancelableCount(batch?: SystemUpdateBatchSummary | null) {
@@ -2014,6 +2542,13 @@ function toggleSystemUpdateTargetAgent(agentId: string) {
 }
 
 async function toggleSystemUpdateNodeDrain(node: SystemUpdateClusterNode, draining: boolean) {
+  const readinessSummary = systemUpdateLatestPreflight.value?.drainCutoverReadiness
+  const confirmMessage = draining
+    ? `是否将节点 ${node.nodeId} 置为排空？\n当前账号数：${node.assignedCount}\n当前阻断账号：${readinessSummary?.blockerCount || 0}\n建议：排空后等待账号迁移完成，再创建更新任务。`
+    : `是否让节点 ${node.nodeId} 恢复接流？\n当前状态：${node.draining ? '排空中' : '接流中'}\n建议：确认更新完成且服务健康后再恢复。`
+  if (!window.window.confirm(confirmMessage))
+    return
+
   systemUpdateNodeMutatingId.value = node.nodeId
   try {
     const res = await settingStore.setSystemUpdateNodeDrain(node.nodeId, draining)
@@ -2062,6 +2597,27 @@ async function retrySystemUpdateBatchNow(batch: SystemUpdateBatchSummary) {
   }
   finally {
     systemUpdateRetryingKey.value = ''
+  }
+}
+
+async function rollbackSystemUpdateJobNow(job: SystemUpdateJob) {
+  const rollbackTarget = job.rollbackPayload?.previousVersion || job.sourceVersion || '上一版本'
+  if (!window.window.confirm(`是否基于任务 ${job.jobKey} 创建回滚任务？\n回滚目标：${rollbackTarget}\n该操作会生成新的标准更新任务。`))
+    return
+
+  systemUpdateRollingBackKey.value = `job:${job.id}`
+  try {
+    const res = await settingStore.rollbackSystemUpdateJob(job.id)
+    if (res.ok) {
+      await refreshSystemUpdateStatus({ silent: true })
+      showAlert(`已创建回滚任务，目标版本 ${rollbackTarget}`)
+    }
+    else {
+      showAlert(`创建回滚任务失败: ${res.error}`, 'danger')
+    }
+  }
+  finally {
+    systemUpdateRollingBackKey.value = ''
   }
 }
 
@@ -5229,6 +5785,16 @@ async function restoreTimingDefaults() {
         </div>
         <div :id="`settings-category-${activeSettingsPrimaryCategory}`" class="settings-route-anchor" />
         <div class="mt-2 flex flex-wrap justify-end gap-2">
+          <ContextHelpButton
+            v-if="showSystemUpdateChecklistHelpEntry"
+            article="deployment-release-and-remote-update"
+            audience="admin"
+            :section="systemUpdateChecklistHelpSectionId"
+            label="远程更新清单"
+            icon-class="i-carbon-launch"
+            variant="secondary"
+            source-context="settings_system_update_release_checklist_entry"
+          />
           <ContextHelpButton
             :article="settingsHelpArticleId"
             :audience="settingsHelpAudience"
@@ -8461,6 +9027,338 @@ async function restoreTimingDefaults() {
                   </div>
                 </div>
 
+                <div class="border border-sky-500/20 rounded-lg bg-sky-500/5 p-3 space-y-3">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <div class="glass-text-main text-sm font-bold">
+                        远程更新最短路径
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        先让版本源可见新版本，再确认宿主机代理在线，最后通过预检和任务流完成远程更新。
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <ContextHelpButton
+                        article="deployment-release-and-remote-update"
+                        audience="admin"
+                        :section="systemUpdateChecklistHelpSectionId"
+                        label="最短发布清单"
+                        icon-class="i-carbon-launch"
+                        variant="secondary"
+                        source-context="settings_system_update_overview_release_checklist"
+                      />
+                      <ContextHelpButton
+                        article="deployment-update-and-recovery"
+                        audience="admin"
+                        :section="systemUpdateUpdateRecoveryHelpSectionId"
+                        label="更新与回滚命令"
+                        icon-class="i-carbon-terminal"
+                        variant="outline"
+                        source-context="settings_system_update_overview_update_recovery"
+                      />
+                    </div>
+                  </div>
+                  <div class="glass-text-muted grid grid-cols-1 gap-2 text-[12px] leading-6 xl:grid-cols-3">
+                    <div class="border border-white/8 rounded-lg bg-black/10 p-2 space-y-2">
+                      <div>
+                        1. 本地改动先完成 <code class="font-mono">git push</code>、tag 或镜像发布，否则“检查更新”不会看到新版本。
+                      </div>
+                      <div class="rounded-md border border-white/8 bg-black/15 px-2 py-1 text-[11px] leading-5 font-mono whitespace-pre-wrap break-all">
+                        {{ SYSTEM_UPDATE_REPAIR_DEPLOY_COMMAND }}
+                      </div>
+                      <BaseButton
+                        size="sm"
+                        :variant="copiedControlKey === 'system-update-repair-deploy' ? 'primary' : 'outline'"
+                        @click="copySystemUpdateRepairDeployCommand"
+                      >
+                        <span :class="copiedControlKey === 'system-update-repair-deploy' ? 'i-carbon-checkmark-filled mr-1 text-sm' : 'i-carbon-copy mr-1 text-sm'" />
+                        {{ copiedControlKey === 'system-update-repair-deploy' ? '已复制修复命令' : '复制修复命令' }}
+                      </BaseButton>
+                    </div>
+                    <div class="border border-white/8 rounded-lg bg-black/10 p-2 space-y-2">
+                      2. 服务器第一次启用前，先执行 <code class="font-mono">repair-deploy.sh --backup</code> 和 <code class="font-mono">install-update-agent-service.sh</code>。
+                      <div class="rounded-md border border-white/8 bg-black/15 px-2 py-1 text-[11px] leading-5 font-mono whitespace-pre-wrap break-all">
+                        {{ SYSTEM_UPDATE_INSTALL_AGENT_COMMAND }}
+                      </div>
+                      <BaseButton
+                        size="sm"
+                        :variant="copiedControlKey === 'system-update-install-agent' ? 'primary' : 'outline'"
+                        @click="copySystemUpdateInstallAgentCommand"
+                      >
+                        <span :class="copiedControlKey === 'system-update-install-agent' ? 'i-carbon-checkmark-filled mr-1 text-sm' : 'i-carbon-copy mr-1 text-sm'" />
+                        {{ copiedControlKey === 'system-update-install-agent' ? '已复制代理安装命令' : '复制代理安装命令' }}
+                      </BaseButton>
+                    </div>
+                    <div class="border border-white/8 rounded-lg bg-black/10 p-2 space-y-2">
+                      3. 正式创建任务前，建议先跑 <code class="font-mono">smoke-system-update-center.sh</code>，再执行预检和远程更新。
+                      <div class="rounded-md border border-white/8 bg-black/15 px-2 py-1 text-[11px] leading-5 font-mono whitespace-pre-wrap break-all">
+                        {{ SYSTEM_UPDATE_SMOKE_COMMAND }}
+                      </div>
+                      <BaseButton
+                        size="sm"
+                        :variant="copiedControlKey === 'system-update-smoke' ? 'primary' : 'outline'"
+                        @click="copySystemUpdateSmokeCommand"
+                      >
+                        <span :class="copiedControlKey === 'system-update-smoke' ? 'i-carbon-checkmark-filled mr-1 text-sm' : 'i-carbon-copy mr-1 text-sm'" />
+                        {{ copiedControlKey === 'system-update-smoke' ? '已复制 smoke 命令' : '复制 smoke 命令' }}
+                      </BaseButton>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  class="border rounded-lg p-3 space-y-3"
+                  :class="systemUpdateRemoteReadinessTone === 'danger' ? 'border-rose-500/20 bg-rose-500/5' : (systemUpdateRemoteReadinessTone === 'warning' ? 'border-amber-500/20 bg-amber-500/10' : 'border-emerald-500/20 bg-emerald-500/5')"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <div class="glass-text-main flex items-center gap-2 text-sm font-bold">
+                        <div class="i-carbon-task-complete" />
+                        远程更新准备度
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        {{ systemUpdateRemoteReadinessSummary }}
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <BaseBadge :tone="systemUpdateRemoteReadinessTone">
+                        {{ systemUpdateRemoteReadinessBlockerCount > 0 ? `阻断 ${systemUpdateRemoteReadinessBlockerCount}` : (systemUpdateRemoteReadinessWarningCount > 0 ? `提醒 ${systemUpdateRemoteReadinessWarningCount}` : '全部就绪') }}
+                      </BaseBadge>
+                      <BaseButton
+                        size="sm"
+                        variant="outline"
+                        :loading="systemUpdateChecking"
+                        @click="checkSystemUpdateNow"
+                      >
+                        检查更新
+                      </BaseButton>
+                      <BaseButton
+                        size="sm"
+                        variant="outline"
+                        :loading="systemUpdatePreflighting"
+                        @click="runSystemUpdatePreflightNow()"
+                      >
+                        执行预检
+                      </BaseButton>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                    <div
+                      v-for="item in systemUpdateRemoteReadinessItems"
+                      :key="item.key"
+                      class="border border-white/8 rounded-lg bg-black/10 p-2"
+                    >
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="glass-text-main text-xs font-semibold">
+                          {{ item.label }}
+                        </div>
+                        <BaseBadge :tone="item.tone">
+                          {{ item.stateLabel }}
+                        </BaseBadge>
+                      </div>
+                      <div class="glass-text-main mt-1 text-[12px] leading-5 break-all">
+                        {{ item.summary }}
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px] leading-5 break-all">
+                        {{ item.detail }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  class="border rounded-lg p-3 space-y-3"
+                  :class="systemUpdateSmokeSummaryTone === 'danger' ? 'border-rose-500/20 bg-rose-500/5' : (systemUpdateSmokeSummaryTone === 'warning' ? 'border-amber-500/20 bg-amber-500/10' : 'border-emerald-500/20 bg-emerald-500/5')"
+                >
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="space-y-1">
+                      <div class="glass-text-main flex items-center gap-2 text-sm font-bold">
+                        <div class="i-carbon-checklist" />
+                        最近 smoke 联动检查
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        <template v-if="systemUpdateLatestSmokeSummary">
+                          {{ systemUpdateSmokeSummaryStale ? '最近一次 smoke 报告已经偏旧，正式更新前建议重新跑一遍。' : '这里展示最近一次非破坏性 smoke 的结果，方便判断“远程更新链路”是否真的跑通过。' }}
+                        </template>
+                        <template v-else>
+                          还没有可读取的 smoke 报告；建议在宿主机先执行一次 <code class="font-mono">smoke-system-update-center.sh</code>。
+                        </template>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <BaseBadge :tone="systemUpdateSmokeSummaryTone">
+                        {{ systemUpdateSmokeSummaryStateLabel }}
+                      </BaseBadge>
+                      <BaseButton
+                        size="sm"
+                        :variant="copiedControlKey === 'system-update-smoke-rerun' ? 'primary' : 'outline'"
+                        @click="copySystemUpdateSmokeRerunCommand"
+                      >
+                        <span :class="copiedControlKey === 'system-update-smoke-rerun' ? 'i-carbon-checkmark-filled mr-1 text-sm' : 'i-carbon-copy mr-1 text-sm'" />
+                        {{ copiedControlKey === 'system-update-smoke-rerun' ? '已复制重跑命令' : '复制重跑 smoke 命令' }}
+                      </BaseButton>
+                    </div>
+                  </div>
+
+                  <div v-if="systemUpdateLatestSmokeSummary" class="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                    <div class="border border-white/8 rounded-lg bg-black/10 p-2 space-y-1">
+                      <div class="glass-text-main text-xs font-semibold">
+                        检查摘要
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        最近检查：{{ systemUpdateLatestSmokeSummary.checkedAtLabel || formatTimestamp(systemUpdateLatestSmokeSummary.checkedAt) }}
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        通过 {{ systemUpdateLatestSmokeSummary.passCount }} · 提醒 {{ systemUpdateLatestSmokeSummary.warnCount }} · 失败 {{ systemUpdateLatestSmokeSummary.failCount }}
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5">
+                        目标 {{ systemUpdateLatestSmokeSummary.targetVersion || '未解析版本' }} · {{ systemUpdateLatestSmokeSummary.targetScope || '-' }} / {{ systemUpdateLatestSmokeSummary.targetStrategy || '-' }}
+                      </div>
+                      <div v-if="systemUpdateLatestSmokeSummary.targetAgents && systemUpdateLatestSmokeSummary.targetAgents !== '未指定'" class="glass-text-muted text-[11px] leading-5 break-all">
+                        目标代理：{{ systemUpdateLatestSmokeSummary.targetAgents }}
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5 break-all">
+                        基础地址：{{ systemUpdateLatestSmokeSummary.baseUrl || '-' }}
+                      </div>
+                    </div>
+
+                    <div class="border border-white/8 rounded-lg bg-black/10 p-2 space-y-1">
+                      <div class="glass-text-main text-xs font-semibold">
+                        结果提示
+                      </div>
+                      <div v-if="systemUpdateSmokeSummaryHighlightLines.length" class="space-y-1">
+                        <div
+                          v-for="line in systemUpdateSmokeSummaryHighlightLines"
+                          :key="line"
+                          class="glass-text-muted text-[11px] leading-5"
+                        >
+                          - {{ line }}
+                        </div>
+                      </div>
+                      <div v-else class="glass-text-muted text-[11px] leading-5">
+                        这次 smoke 没有返回额外的结果明细。
+                      </div>
+                      <div v-if="systemUpdateSmokeSummaryStale" class="glass-text-muted text-[11px] leading-5">
+                        当前报告已经超过 3 天，建议在正式创建更新任务前重新跑一次。
+                      </div>
+                      <div class="glass-text-muted text-[11px] leading-5 break-all">
+                        宿主机核验：{{ systemUpdateLatestSmokeSummary.verifyTarget || '未记录' }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="systemUpdateLatestSmokeSummary?.summaryPath" class="glass-text-muted text-[11px] leading-5 break-all">
+                    报告文件：{{ systemUpdateLatestSmokeSummary.summaryPath }}
+                  </div>
+                </div>
+
+                <div class="border border-white/10 rounded-lg bg-black/10 p-3 space-y-3">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="glass-text-main text-sm font-bold">
+                      版本说明预览
+                    </div>
+                    <a
+                      v-if="systemUpdateOverview?.latestRelease?.url"
+                      :href="systemUpdateOverview.latestRelease.url"
+                      target="_blank"
+                      rel="noreferrer"
+                      class="glass-text-muted text-[11px] hover:underline"
+                    >
+                      打开 Release
+                    </a>
+                  </div>
+                  <div class="glass-text-muted text-sm">
+                    <template v-if="systemUpdateOverview?.latestRelease">
+                      <p>
+                        <strong>标题：</strong>{{ systemUpdateOverview.latestRelease.title || systemUpdateLatestVersionLabel }}
+                      </p>
+                      <p>
+                        <strong>发布日期：</strong>{{ formatTimestamp(systemUpdateOverview.latestRelease.publishedAt) }}
+                      </p>
+                    </template>
+                    <p v-else>
+                      执行“检查更新”后，这里会显示最新版本的说明摘要和资产信息。
+                    </p>
+                  </div>
+                  <div v-if="systemUpdateLatestReleaseNotes" class="glass-text-muted rounded-lg border border-white/8 bg-black/10 p-3 text-[12px] leading-6 whitespace-pre-wrap">
+                    {{ systemUpdateLatestReleaseNotes }}
+                  </div>
+                  <div v-if="systemUpdateLatestReleaseAssets.length" class="space-y-2">
+                    <div class="glass-text-main text-xs font-semibold">
+                      关键资产
+                    </div>
+                    <div
+                      v-for="asset in systemUpdateLatestReleaseAssets"
+                      :key="`${asset.name}:${asset.url}`"
+                      class="border border-white/8 rounded-lg bg-black/10 p-2"
+                    >
+                      <div class="glass-text-main text-xs font-semibold break-all">
+                        {{ asset.name || '未命名资产' }}
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px]">
+                        {{ formatSystemUpdateAssetSize(asset.size) }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  class="border rounded-lg p-3 space-y-3"
+                  :class="systemUpdateSyncRecommendation?.suggested ? 'border-cyan-500/20 bg-cyan-500/5' : 'border-white/10 bg-black/10'"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="glass-text-main text-sm font-bold">
+                        公告同步预览
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px]">
+                        {{ systemUpdateSyncRecommendation?.reason || '执行“检查更新”后，会在这里显示版本说明可物化成多少条公告。' }}
+                      </div>
+                    </div>
+                    <div class="shrink-0 flex items-center gap-2">
+                      <BaseBadge :tone="systemUpdateSyncRecommendation?.suggested ? 'info' : 'success'">
+                        {{ systemUpdateSyncRecommendation ? (systemUpdateSyncRecommendation.suggested ? '建议同步' : '已同步') : '待检查' }}
+                      </BaseBadge>
+                      <BaseButton
+                        size="sm"
+                        variant="outline"
+                        :loading="systemUpdateAnnouncementSyncing"
+                        @click="syncSystemUpdateAnnouncementsNow"
+                      >
+                        同步公告
+                      </BaseButton>
+                    </div>
+                  </div>
+                  <div v-if="systemUpdateAnnouncementPreview" class="glass-text-muted text-xs">
+                    待新增 {{ systemUpdateAnnouncementPreview.added }} · 待更新 {{ systemUpdateAnnouncementPreview.updated }} · 已跳过 {{ systemUpdateAnnouncementPreview.skipped }} · 来源 {{ summarizeSystemUpdateAnnouncementSources(systemUpdateAnnouncementPreview.sources) }}
+                  </div>
+                  <div v-if="systemUpdateAnnouncementPreview?.entries?.length" class="space-y-2">
+                    <div
+                      v-for="entry in systemUpdateAnnouncementPreview.entries"
+                      :key="`${entry.version}:${entry.publishDate}:${entry.title}`"
+                      class="border border-white/8 rounded-lg bg-black/10 p-2"
+                    >
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="glass-text-main text-xs font-semibold">{{ entry.title }}</span>
+                        <BaseBadge v-if="entry.version" tone="info">
+                          {{ entry.version }}
+                        </BaseBadge>
+                        <span class="glass-text-muted text-[11px]">{{ entry.publishDate || '未标日期' }}</span>
+                        <span class="glass-text-muted text-[11px]">{{ getSystemUpdateAnnouncementSourceLabel(entry.sourceType) }}</span>
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px] leading-5">
+                        {{ entry.summary || '暂无摘要' }}
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="glass-text-muted text-xs">
+                    暂无可预览的公告候选；通常在执行一次“检查更新”后这里会刷新。
+                  </div>
+                  <div v-if="systemUpdateLastAnnouncementSyncResult" class="glass-text-muted text-[11px]">
+                    最近同步：新增 {{ systemUpdateLastAnnouncementSyncResult.added }} · 更新 {{ systemUpdateLastAnnouncementSyncResult.updated }} · 跳过 {{ systemUpdateLastAnnouncementSyncResult.skipped }} · 最新版本 {{ systemUpdateLastAnnouncementSyncResult.latestVersion || '-' }}
+                  </div>
+                </div>
+
                 <div
                   class="border rounded-lg p-3 space-y-2"
                   :class="systemUpdateDrainCutoverReadiness?.canDrainCutover ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/10'"
@@ -8475,6 +9373,9 @@ async function restoreTimingDefaults() {
                   <div v-if="systemUpdateDrainCutoverReadiness && !systemUpdateDrainCutoverReadiness.canDrainCutover" class="glass-text-muted text-[11px]">
                     当前版本已经验证过：集群调度可用，但尚未实现账号运行态热迁移；若账号只剩一次性登录凭据，切换后通常需要重新登录。
                   </div>
+                  <div v-if="systemUpdateDrainCutoverReadiness?.estimatedDrainSeconds" class="glass-text-muted text-[11px]">
+                    预计排空耗时：约 {{ Math.ceil((systemUpdateDrainCutoverReadiness.estimatedDrainSeconds || 0) / 60) }} 分钟
+                  </div>
                   <div v-if="systemUpdateDrainCutoverBlockers.length" class="space-y-2">
                     <div
                       v-for="blocker in systemUpdateDrainCutoverBlockers"
@@ -8486,6 +9387,58 @@ async function restoreTimingDefaults() {
                       </div>
                       <div class="glass-text-muted mt-1 text-[11px]">
                         {{ blocker.platform || '-' }} · {{ blocker.credentialKind || '-' }} · {{ blocker.message }}
+                      </div>
+                    </div>
+                  </div>
+                  <div v-if="systemUpdateDrainCutoverReadiness?.blockingNodes?.length" class="glass-text-muted text-[11px] space-y-1">
+                    <div
+                      v-for="node in systemUpdateDrainCutoverReadiness.blockingNodes"
+                      :key="node.nodeId"
+                    >
+                      阻断节点 {{ node.nodeId }}：{{ node.blockerCount }} 个账号
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  class="border rounded-lg p-3 space-y-3"
+                  :class="systemUpdateLatestPreflight?.ok ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-white/10 bg-black/10'"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="glass-text-main text-sm font-bold">
+                        更新预检
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px]">
+                        单独预检不会创建任务，只会返回当前环境是否允许继续执行。
+                      </div>
+                    </div>
+                    <BaseButton
+                      size="sm"
+                      variant="outline"
+                      :loading="systemUpdatePreflighting"
+                      @click="runSystemUpdatePreflightNow()"
+                    >
+                      执行预检
+                    </BaseButton>
+                  </div>
+                  <div v-if="systemUpdateLatestPreflight" class="glass-text-muted text-xs">
+                    最近预检：{{ systemUpdateLatestPreflight.ok ? '通过' : '存在阻断' }} · 阻断 {{ systemUpdateLatestPreflight.blockerCount }} · 提醒 {{ systemUpdateLatestPreflight.warningCount }}
+                  </div>
+                  <div v-if="systemUpdatePreflightChecks.length" class="grid grid-cols-1 gap-2 xl:grid-cols-2">
+                    <div
+                      v-for="check in systemUpdatePreflightChecks"
+                      :key="check.key"
+                      class="border border-white/8 rounded-lg bg-black/10 p-2"
+                    >
+                      <div class="flex items-center gap-2">
+                        <span class="glass-text-main text-xs font-semibold">{{ check.label }}</span>
+                        <BaseBadge :tone="getSystemUpdatePreflightCheckTone(check)">
+                          {{ check.blocker ? '阻断' : (check.warning ? '提醒' : '通过') }}
+                        </BaseBadge>
+                      </div>
+                      <div class="glass-text-muted mt-1 text-[11px] leading-5">
+                        {{ check.message || '暂无说明' }}
                       </div>
                     </div>
                   </div>
@@ -8537,9 +9490,31 @@ async function restoreTimingDefaults() {
                       label="默认更新策略"
                       :options="systemUpdateStrategyOptions"
                     />
+                    <BaseInput
+                      v-model="systemUpdateConfig.maintenanceWindow"
+                      label="维护窗口"
+                      type="text"
+                      placeholder="例如：02:00-05:00"
+                    />
+                    <BaseInput
+                      v-model.number="systemUpdateConfig.defaultLogTailLines"
+                      label="默认日志尾部行数"
+                      type="number"
+                      placeholder="80"
+                    />
                     <div class="grid grid-cols-2 gap-3">
                       <BaseSwitch v-model="systemUpdateConfig.allowPreRelease" label="允许预发布版本" />
                       <BaseSwitch v-model="systemUpdateConfig.requireDrain" label="默认要求排空" />
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <BaseSwitch v-model="systemUpdateConfig.autoSyncAnnouncements" label="默认同步公告" />
+                      <BaseSwitch v-model="systemUpdateConfig.autoRunVerification" label="默认执行核验" />
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <BaseSwitch v-model="systemUpdateConfig.promptRollbackOnFailure" label="失败后提示回滚" />
+                      <div class="glass-text-muted text-[11px] leading-5 flex items-center">
+                        这些策略会直接影响新任务默认值与失败后的推荐动作。
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -8587,6 +9562,27 @@ async function restoreTimingDefaults() {
                       <BaseSwitch v-model="systemUpdateDraft.preserveCurrent" label="保留旧版本目录" />
                       <BaseSwitch v-model="systemUpdateDraft.requireDrain" label="执行前先排空" />
                     </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <BaseSwitch v-model="systemUpdateDraft.syncAnnouncements" label="更新后同步公告" />
+                      <BaseSwitch v-model="systemUpdateDraft.runVerification" label="更新后执行核验" />
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <BaseSwitch v-model="systemUpdateDraft.allowAutoRollback" label="允许自动回退" />
+                      <BaseSwitch v-model="systemUpdateDraft.includeDeployTemplates" label="同步部署脚本模板" />
+                    </div>
+                  </div>
+                  <div class="glass-text-muted text-[11px] leading-5">
+                    “允许自动回退”会把回退意图写入任务模型，后续可以配合回滚任务或失败提示使用；当前默认仍建议人工确认后再执行回滚。
+                  </div>
+                  <div class="flex flex-wrap gap-2">
+                    <BaseButton
+                      size="sm"
+                      variant="outline"
+                      :loading="systemUpdatePreflighting"
+                      @click="runSystemUpdatePreflightNow()"
+                    >
+                      先执行预检
+                    </BaseButton>
                   </div>
                 </div>
               </div>
@@ -8608,6 +9604,15 @@ async function restoreTimingDefaults() {
                     >
                       取消任务
                     </BaseButton>
+                    <BaseButton
+                      v-if="canRollbackSystemUpdateJob(activeSystemUpdateJob)"
+                      size="sm"
+                      variant="outline"
+                      :loading="systemUpdateRollingBackKey === `job:${activeSystemUpdateJob?.id}`"
+                      @click="activeSystemUpdateJob && rollbackSystemUpdateJobNow(activeSystemUpdateJob)"
+                    >
+                      创建回滚任务
+                    </BaseButton>
                   </div>
                   <div class="glass-text-muted text-sm">
                     {{ describeSystemUpdateJob(activeSystemUpdateJob) }}
@@ -8617,6 +9622,9 @@ async function restoreTimingDefaults() {
                   </div>
                   <div v-if="activeSystemUpdateJob?.errorMessage" class="glass-text-muted text-[11px]">
                     失败原因：{{ activeSystemUpdateJob.errorMessage }}
+                  </div>
+                  <div v-if="activeSystemUpdateJob?.errorMessage && systemUpdateConfig.promptRollbackOnFailure && canRollbackSystemUpdateJob(activeSystemUpdateJob)" class="glass-text-muted text-[11px]">
+                    建议：当前任务已具备回滚条件，可以直接创建回滚任务作为下一步处理。
                   </div>
                   <div v-if="activeSystemUpdateJob?.result?.logFile" class="glass-text-muted break-all text-[11px] font-mono">
                     代理日志：{{ activeSystemUpdateJob.result.logFile }}
@@ -8670,6 +9678,15 @@ async function restoreTimingDefaults() {
                 </div>
               </div>
 
+              <SystemUpdateJobDetailPanel
+                :detail="activeSystemUpdateJobDetail"
+                :loading="systemUpdateJobDetailLoading"
+              />
+
+              <SystemUpdateBatchDetail
+                :batch="activeSystemUpdateBatch"
+              />
+
               <div class="border border-white/10 rounded-lg bg-black/10 p-3 space-y-3">
                 <div class="glass-text-main text-sm font-bold">
                   最近更新任务
@@ -8705,7 +9722,7 @@ async function restoreTimingDefaults() {
                     <div v-if="job.result?.logFile" class="glass-text-muted mt-1 break-all text-[11px] font-mono">
                       代理日志：{{ job.result.logFile }}
                     </div>
-                    <div v-if="canCancelSystemUpdateJob(job) || job.status === 'failed' || job.status === 'cancelled'" class="mt-2 flex flex-wrap gap-2">
+                    <div v-if="canCancelSystemUpdateJob(job) || job.status === 'failed' || job.status === 'cancelled' || canRollbackSystemUpdateJob(job)" class="mt-2 flex flex-wrap gap-2">
                       <BaseButton
                         v-if="canCancelSystemUpdateJob(job)"
                         size="sm"
@@ -8723,6 +9740,15 @@ async function restoreTimingDefaults() {
                         @click="retrySystemUpdateJobNow(job)"
                       >
                         重试此任务
+                      </BaseButton>
+                      <BaseButton
+                        v-if="canRollbackSystemUpdateJob(job)"
+                        size="sm"
+                        variant="outline"
+                        :loading="systemUpdateRollingBackKey === `job:${job.id}`"
+                        @click="rollbackSystemUpdateJobNow(job)"
+                      >
+                        创建回滚任务
                       </BaseButton>
                     </div>
                   </div>

@@ -300,6 +300,7 @@ copy_or_download_bundle() {
         cp "${LOCAL_SCRIPT_BUNDLE_DIR}/manual-config-wizard.sh" "${target_dir}/manual-config-wizard.sh"
         cp "${LOCAL_SCRIPT_BUNDLE_DIR}/stack-layout.sh" "${target_dir}/stack-layout.sh"
         cp "${LOCAL_SCRIPT_BUNDLE_DIR}/verify-stack.sh" "${target_dir}/verify-stack.sh"
+        cp "${LOCAL_SCRIPT_BUNDLE_DIR}/smoke-system-update-center.sh" "${target_dir}/smoke-system-update-center.sh"
     else
         download_file "deploy/docker-compose.yml" "${target_dir}/docker-compose.yml"
         download_file "deploy/.env.example" "${target_dir}/.env.example"
@@ -317,6 +318,7 @@ copy_or_download_bundle() {
         download_file "scripts/deploy/manual-config-wizard.sh" "${target_dir}/manual-config-wizard.sh"
         download_file "scripts/deploy/stack-layout.sh" "${target_dir}/stack-layout.sh"
         download_file "scripts/deploy/verify-stack.sh" "${target_dir}/verify-stack.sh"
+        download_file "scripts/deploy/smoke-system-update-center.sh" "${target_dir}/smoke-system-update-center.sh"
     fi
 
     cp "${target_dir}/.env.example" "${target_dir}/.env"
@@ -332,6 +334,7 @@ copy_or_download_bundle() {
     chmod +x "${target_dir}/manual-config-wizard.sh"
     chmod +x "${target_dir}/stack-layout.sh"
     chmod +x "${target_dir}/verify-stack.sh"
+    chmod +x "${target_dir}/smoke-system-update-center.sh"
 }
 
 set_env_value() {
@@ -1002,7 +1005,7 @@ pull_required_images() {
         print_info "检测到 SKIP_DOCKER_PULL=${SKIP_DOCKER_PULL}，跳过镜像拉取，直接使用本地镜像。"
     fi
 
-    local requested_app_image="${APP_IMAGE:-${OFFICIAL_DOCKERHUB_APP_IMAGE}:4.5.34}"
+    local requested_app_image="${APP_IMAGE:-${OFFICIAL_DOCKERHUB_APP_IMAGE}:4.5.35}"
     local image=""
 
     resolve_app_image "${requested_app_image}" || return 1
@@ -1201,6 +1204,7 @@ main() {
     echo "安全升级脚本: ${CURRENT_LINK}/safe-update.sh"
     echo "手动修复向导: ${CURRENT_LINK}/manual-config-wizard.sh"
     echo "安装后核验脚本: ${CURRENT_LINK}/verify-stack.sh"
+    echo "更新中心 smoke: ${CURRENT_LINK}/smoke-system-update-center.sh --base-url http://127.0.0.1:9527 --username admin --password '你的管理员密码' --deploy-dir ${CURRENT_LINK}"
     echo "默认管理员: admin"
     echo "管理员密码: 见 ${DEPLOY_DIR}/.env 中的 ADMIN_PASSWORD"
     echo "后续仅更新主程序: ${CURRENT_LINK}/update-app.sh"

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `help_center_event_daily` (
+    `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
+    `record_date` DATE NOT NULL,
+    `event_type` VARCHAR(64) NOT NULL,
+    `article_id` VARCHAR(80) NOT NULL DEFAULT '',
+    `article_category` VARCHAR(80) NOT NULL DEFAULT '',
+    `source_page` VARCHAR(80) NOT NULL DEFAULT '',
+    `user_role` VARCHAR(32) NOT NULL DEFAULT '',
+    `result` VARCHAR(24) NOT NULL DEFAULT 'success',
+    `event_count` INT NOT NULL DEFAULT 0,
+    `user_count` INT NOT NULL DEFAULT 0,
+    `success_count` INT NOT NULL DEFAULT 0,
+    `failed_count` INT NOT NULL DEFAULT 0,
+    `avg_latency_ms` INT NOT NULL DEFAULT 0,
+    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY `uk_help_center_event_daily_dims` (`record_date`, `event_type`, `article_id`, `source_page`, `user_role`, `result`),
+    KEY `idx_help_center_event_daily_date_type` (`record_date`, `event_type`),
+    KEY `idx_help_center_event_daily_article` (`article_id`, `record_date`),
+    KEY `idx_help_center_event_daily_source` (`source_page`, `record_date`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '帮助中心日聚合事件统计表';

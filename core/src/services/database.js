@@ -3,6 +3,7 @@ const { initRedis, closeRedis, getRedisClient } = require('./redis-cache');
 const { cacheCircuitBreaker } = require('./circuit-breaker');
 const { createModuleLogger } = require('./logger');
 const { initJwtSecretPersistence } = require('./jwt-service');
+const { parseJsonSafely } = require('./system-update-utils');
 
 const logger = createModuleLogger('database');
 const EMPTY_ACCOUNT_UIN_DB_PREFIX = '__ACCOUNT_ID__:';
@@ -549,15 +550,28 @@ async function getAnnouncements() {
     try {
         // 按照 ID 倒序排列获取所有有效和非有效公告
         const [rows] = await pool.execute(
-            'SELECT id, title, version, publish_date, content, enabled, created_by, created_at, updated_at FROM announcements ORDER BY id DESC'
+            `SELECT
+                id, title, version, publish_date, summary, content, enabled,
+                source_type, source_key, release_url, assets_json,
+                installed_version, installed_at, created_by, created_at, updated_at
+            FROM announcements
+            ORDER BY id DESC`
         );
         const data = rows.map(row => ({
             id: row.id,
             title: row.title || '',
             version: row.version || '',
             publish_date: row.publish_date || '',
+            publishDate: row.publish_date || '',
+            summary: row.summary || '',
             content: row.content || '',
             enabled: !!row.enabled,
+            sourceType: row.source_type || 'manual',
+            sourceKey: row.source_key || '',
+            releaseUrl: row.release_url || '',
+            assets: parseJsonSafely(row.assets_json, []),
+            installedVersion: row.installed_version || '',
+            installedAt: row.installed_at || null,
             createdBy: row.created_by,
             createdAt: row.created_at,
             updatedAt: row.updated_at,
@@ -577,17 +591,104 @@ async function getAnnouncements() {
 
 async function saveAnnouncement(data) {
     const pool = getPool();
-    const { id, title = '', version = '', publish_date = '', content = '', enabled = true, createdBy = null } = data || {};
+    const {
+        id,
+        title = '',
+        version = '',
+        publish_date = '',
+        summary = '',
+        content = '',
+        enabled = true,
+        createdBy = null,
+        sourceType = 'manual',
+        sourceKey = '',
+        releaseUrl = '',
+        assets = [],
+        installedVersion = '',
+        installedAt = null,
+    } = data || {};
+    const normalizedSourceKey = String(sourceKey || '').trim() || null;
+    const normalizedAssets = Array.isArray(assets) ? assets : [];
     try {
         if (id) {
             await pool.execute(
-                'UPDATE announcements SET title = ?, version = ?, publish_date = ?, content = ?, enabled = ?, created_by = ? WHERE id = ?',
-                [title, version, publish_date, content, enabled ? 1 : 0, createdBy, id]
+                `UPDATE announcements
+                SET title = ?, version = ?, publish_date = ?, summary = ?, content = ?, enabled = ?, created_by = ?,
+                    source_type = ?, source_key = ?, release_url = ?, assets_json = ?, installed_version = ?, installed_at = ?
+                WHERE id = ?`,
+                [
+                    title,
+                    version,
+                    publish_date,
+                    summary,
+                    content,
+                    enabled ? 1 : 0,
+                    createdBy,
+                    sourceType,
+                    normalizedSourceKey,
+                    releaseUrl,
+                    normalizedAssets.length > 0 ? JSON.stringify(normalizedAssets) : null,
+                    installedVersion || '',
+                    installedAt || null,
+                    id,
+                ]
+            );
+        } else if (normalizedSourceKey) {
+            await pool.execute(
+                `INSERT INTO announcements (
+                    title, version, publish_date, summary, content, enabled, created_by,
+                    source_type, source_key, release_url, assets_json, installed_version, installed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    title = VALUES(title),
+                    version = VALUES(version),
+                    publish_date = VALUES(publish_date),
+                    summary = VALUES(summary),
+                    content = VALUES(content),
+                    enabled = VALUES(enabled),
+                    created_by = VALUES(created_by),
+                    source_type = VALUES(source_type),
+                    release_url = VALUES(release_url),
+                    assets_json = VALUES(assets_json),
+                    installed_version = VALUES(installed_version),
+                    installed_at = VALUES(installed_at)`,
+                [
+                    title,
+                    version,
+                    publish_date,
+                    summary,
+                    content,
+                    enabled ? 1 : 0,
+                    createdBy,
+                    sourceType,
+                    normalizedSourceKey,
+                    releaseUrl,
+                    normalizedAssets.length > 0 ? JSON.stringify(normalizedAssets) : null,
+                    installedVersion || '',
+                    installedAt || null,
+                ]
             );
         } else {
             await pool.execute(
-                'INSERT INTO announcements (title, version, publish_date, content, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-                [title, version, publish_date, content, enabled ? 1 : 0, createdBy]
+                `INSERT INTO announcements (
+                    title, version, publish_date, summary, content, enabled, created_by,
+                    source_type, source_key, release_url, assets_json, installed_version, installed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    title,
+                    version,
+                    publish_date,
+                    summary,
+                    content,
+                    enabled ? 1 : 0,
+                    createdBy,
+                    sourceType,
+                    null,
+                    releaseUrl,
+                    normalizedAssets.length > 0 ? JSON.stringify(normalizedAssets) : null,
+                    installedVersion || '',
+                    installedAt || null,
+                ]
             );
         }
         await invalidateAnnouncementCache();

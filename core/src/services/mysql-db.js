@@ -281,6 +281,7 @@ async function initMysql() {
                 ['channel', "ALTER TABLE cards ADD COLUMN channel VARCHAR(64) DEFAULT '' AFTER source", 'cards.channel'],
                 ['note', "ALTER TABLE cards ADD COLUMN note TEXT DEFAULT NULL AFTER channel", 'cards.note'],
                 ['created_by', "ALTER TABLE cards ADD COLUMN created_by VARCHAR(100) DEFAULT NULL AFTER note", 'cards.created_by'],
+                ['expires_override', "ALTER TABLE cards ADD COLUMN expires_override TINYINT(1) NOT NULL DEFAULT 0 AFTER expires_at", 'cards.expires_override'],
                 ['updated_at', "ALTER TABLE cards ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at", 'cards.updated_at'],
             ];
             for (const [columnName, alterSql, label] of cardColumnEnsures) {
@@ -346,6 +347,37 @@ async function initMysql() {
                     logger.info('检测到 announcements 表缺少 version 和 publish_date 列，正在添加...');
                     await pool.query(`ALTER TABLE announcements ADD COLUMN version VARCHAR(50) DEFAULT '' AFTER title, ADD COLUMN publish_date VARCHAR(50) DEFAULT '' AFTER version`);
                     logger.info('✅ announcements.version 列添加完成');
+                }
+
+                const announcementColumnEnsures = [
+                    ['summary', "ALTER TABLE announcements ADD COLUMN summary TEXT DEFAULT NULL AFTER publish_date", 'announcements.summary'],
+                    ['source_type', "ALTER TABLE announcements ADD COLUMN source_type VARCHAR(32) NOT NULL DEFAULT 'manual' AFTER enabled", 'announcements.source_type'],
+                    ['source_key', "ALTER TABLE announcements ADD COLUMN source_key VARCHAR(64) DEFAULT NULL AFTER source_type", 'announcements.source_key'],
+                    ['release_url', "ALTER TABLE announcements ADD COLUMN release_url VARCHAR(1024) DEFAULT '' AFTER source_key", 'announcements.release_url'],
+                    ['assets_json', "ALTER TABLE announcements ADD COLUMN assets_json JSON DEFAULT NULL AFTER release_url", 'announcements.assets_json'],
+                    ['installed_version', "ALTER TABLE announcements ADD COLUMN installed_version VARCHAR(64) DEFAULT '' AFTER assets_json", 'announcements.installed_version'],
+                    ['installed_at', "ALTER TABLE announcements ADD COLUMN installed_at DATETIME DEFAULT NULL AFTER installed_version", 'announcements.installed_at'],
+                ];
+                for (const [columnName, alterSql, label] of announcementColumnEnsures) {
+                    const [columnRows] = await pool.execute(
+                        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'announcements' AND COLUMN_NAME = ?`,
+                        [DB_NAME, columnName]
+                    );
+                    if (columnRows.length === 0) {
+                        logger.info(`检测到缺少 ${label}，正在添加...`);
+                        await pool.query(alterSql);
+                        logger.info(`✅ ${label} 添加完成`);
+                    }
+                }
+
+                const [announcementSourceKeyIndexRows] = await pool.execute(
+                    `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'announcements' AND INDEX_NAME = 'uniq_announcements_source_key'`,
+                    [DB_NAME]
+                );
+                if (announcementSourceKeyIndexRows.length === 0) {
+                    logger.info('检测到 announcements 表缺少 source_key 唯一索引，正在添加...');
+                    await pool.query('ALTER TABLE announcements ADD UNIQUE INDEX uniq_announcements_source_key (source_key)');
+                    logger.info('✅ announcements.uniq_announcements_source_key 添加完成');
                 }
             }
 
@@ -419,6 +451,38 @@ async function initMysql() {
                 await runMigrationFile(
                     path.join(migrationsDir, '018-bug-reports.sql'),
                     '检测到缺少 bug_reports 表，正在执行迁移 018-bug-reports.sql',
+                );
+            }
+
+            const [helpCenterEventsTable] = await pool.execute(`SHOW TABLES LIKE 'help_center_events'`);
+            if (helpCenterEventsTable.length === 0) {
+                await runMigrationFile(
+                    path.join(migrationsDir, '021-help-center-events.sql'),
+                    '检测到缺少 help_center_events 表，正在执行迁移 021-help-center-events.sql',
+                );
+            }
+
+            const [helpCenterFeedbackTable] = await pool.execute(`SHOW TABLES LIKE 'help_center_feedback'`);
+            if (helpCenterFeedbackTable.length === 0) {
+                await runMigrationFile(
+                    path.join(migrationsDir, '022-help-center-feedback.sql'),
+                    '检测到缺少 help_center_feedback 表，正在执行迁移 022-help-center-feedback.sql',
+                );
+            }
+
+            const [helpCenterEventDailyTable] = await pool.execute(`SHOW TABLES LIKE 'help_center_event_daily'`);
+            if (helpCenterEventDailyTable.length === 0) {
+                await runMigrationFile(
+                    path.join(migrationsDir, '023-help-center-event-daily.sql'),
+                    '检测到缺少 help_center_event_daily 表，正在执行迁移 023-help-center-event-daily.sql',
+                );
+            }
+
+            const [helpCenterJumpDailyTable] = await pool.execute(`SHOW TABLES LIKE 'help_center_jump_daily'`);
+            if (helpCenterJumpDailyTable.length === 0) {
+                await runMigrationFile(
+                    path.join(migrationsDir, '024-help-center-jump-daily.sql'),
+                    '检测到缺少 help_center_jump_daily 表，正在执行迁移 024-help-center-jump-daily.sql',
                 );
             }
 
@@ -508,6 +572,11 @@ async function initMysql() {
                 const updateJobColumnEnsures = [
                     ['batch_key', "ALTER TABLE update_jobs ADD COLUMN batch_key VARCHAR(64) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' AFTER target_version", 'update_jobs.batch_key'],
                     ['target_agent_id', "ALTER TABLE update_jobs ADD COLUMN target_agent_id VARCHAR(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' AFTER created_by", 'update_jobs.target_agent_id'],
+                    ['preflight_json', "ALTER TABLE update_jobs ADD COLUMN preflight_json JSON DEFAULT NULL AFTER result_json", 'update_jobs.preflight_json'],
+                    ['rollback_payload_json', "ALTER TABLE update_jobs ADD COLUMN rollback_payload_json JSON DEFAULT NULL AFTER preflight_json", 'update_jobs.rollback_payload_json'],
+                    ['verification_json', "ALTER TABLE update_jobs ADD COLUMN verification_json JSON DEFAULT NULL AFTER rollback_payload_json", 'update_jobs.verification_json'],
+                    ['result_signature', "ALTER TABLE update_jobs ADD COLUMN result_signature VARCHAR(64) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' AFTER verification_json", 'update_jobs.result_signature'],
+                    ['execution_phase', "ALTER TABLE update_jobs ADD COLUMN execution_phase VARCHAR(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued' AFTER result_signature", 'update_jobs.execution_phase'],
                 ];
                 for (const [columnName, alterSql, label] of updateJobColumnEnsures) {
                     const [columnRows] = await pool.execute(
@@ -524,6 +593,8 @@ async function initMysql() {
                 const updateJobIndexEnsures = [
                     ['idx_update_jobs_batch_key', 'ALTER TABLE update_jobs ADD KEY idx_update_jobs_batch_key (batch_key)'],
                     ['idx_update_jobs_target_status', 'ALTER TABLE update_jobs ADD KEY idx_update_jobs_target_status (target_agent_id, status)'],
+                    ['idx_update_jobs_status_finished', 'ALTER TABLE update_jobs ADD KEY idx_update_jobs_status_finished (status, finished_at)'],
+                    ['idx_update_jobs_result_signature', 'ALTER TABLE update_jobs ADD KEY idx_update_jobs_result_signature (result_signature)'],
                 ];
                 for (const [indexName, alterSql] of updateJobIndexEnsures) {
                     const [indexRows] = await pool.execute(
@@ -538,6 +609,29 @@ async function initMysql() {
                         logger.info(`✅ update_jobs.${indexName} 添加完成`);
                     }
                 }
+            }
+
+            const [updateJobLogsTable] = await pool.execute(`SHOW TABLES LIKE 'update_job_logs'`);
+            if (updateJobLogsTable.length === 0) {
+                logger.info('检测到缺少 update_job_logs 表，正在创建...');
+                await pool.query(`
+                    CREATE TABLE IF NOT EXISTS update_job_logs (
+                        id BIGINT NOT NULL AUTO_INCREMENT,
+                        job_id BIGINT NOT NULL,
+                        phase VARCHAR(32) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued',
+                        level VARCHAR(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'info',
+                        message VARCHAR(500) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',
+                        payload_json JSON DEFAULT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (id),
+                        KEY idx_update_job_logs_job_id_id (job_id, id),
+                        KEY idx_update_job_logs_phase_created (phase, created_at),
+                        CONSTRAINT fk_update_job_logs_job_id
+                            FOREIGN KEY (job_id) REFERENCES update_jobs (id)
+                            ON DELETE CASCADE
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                `);
+                logger.info('✅ update_job_logs 创建完成');
             }
 
             const [uiSettingsTable] = await pool.execute(`SHOW TABLES LIKE 'ui_settings'`);

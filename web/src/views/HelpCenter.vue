@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import type { HelpArticle, HelpArticleOutlineItem, ResolvedHelpArticle } from '@/data/help-articles'
+import type { HelpCenterObservabilityPublicConfig, HelpCenterTelemetryEventInput } from '@/types/help-center-observability'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { isNavigationFailure, useRoute, useRouter } from 'vue-router'
 import HelpArticleBody from '@/components/help/HelpArticleBody.vue'
+import HelpFeedbackDialog from '@/components/help/HelpFeedbackDialog.vue'
 import BaseBadge from '@/components/ui/BaseBadge.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import { useCopyInteraction } from '@/composables/use-copy-interaction'
@@ -20,15 +22,26 @@ import {
   loadHelpSearchIndex,
   resolveHelpArticle,
 } from '@/data/help-articles'
+import { createHelpCenterJumpTrace } from '@/services/help-center-jump-tracer'
+import { getHelpCenterObservabilityConfig as fetchHelpCenterObservabilityConfig, initializeHelpCenterTelemetry, trackHelpCenterEvent } from '@/services/help-center-telemetry'
 import { useAppStore } from '@/stores/app'
+import { useToastStore } from '@/stores/toast'
 
 type HelpAudienceFilter = 'all' | 'recommended' | 'all-users' | 'operator' | 'admin'
 type HelpQuickFilter = 'all' | 'pinned' | 'unread' | 'visited'
 type HelpUsageStats = Record<string, { openCount: number, lastOpenedAt: number }>
+interface PendingArticleTelemetry {
+  eventType?: 'article_open' | 'article_switch'
+  openReason?: string
+  switchSource?: string
+  sourceContext?: string
+  meta?: Record<string, unknown>
+}
 
 const appStore = useAppStore()
 const route = useRoute()
 const router = useRouter()
+const toast = useToastStore()
 const { copyText } = useCopyInteraction({
   successTitle: '帮助文档已复制',
   failureMessage: '复制失败，请手动复制',
@@ -38,6 +51,10 @@ const ARTICLE_QUERY_KEY = 'article'
 const AUDIENCE_QUERY_KEY = 'audience'
 const QUICK_FILTER_QUERY_KEY = 'quick'
 const SECTION_QUERY_KEY = 'section'
+const TRACE_QUERY_KEY = 'helpTraceId'
+const TRACE_SOURCE_PAGE_QUERY_KEY = 'helpSourcePage'
+const TRACE_SOURCE_ROUTE_QUERY_KEY = 'helpSourceRoute'
+const TRACE_SOURCE_CONTEXT_QUERY_KEY = 'helpSourceContext'
 const HELP_VISITED_ARTICLES_STORAGE_KEY = 'help_center_visited_articles'
 const HELP_PINNED_ARTICLES_STORAGE_KEY = 'help_center_pinned_articles'
 const HELP_USAGE_STATS_STORAGE_KEY = 'help_center_usage_stats'
@@ -55,15 +72,26 @@ const searchIndexedArticles = ref<Record<string, ResolvedHelpArticle>>({})
 const visitedArticleIds = ref<string[]>([])
 const pinnedArticleIds = ref<string[]>([])
 const usageStats = ref<HelpUsageStats>({})
+const observabilityConfig = ref<HelpCenterObservabilityPublicConfig>({
+  telemetryEnabled: false,
+  feedbackEnabled: false,
+  jumpTracingEnabled: false,
+  telemetrySamplingRate: 0,
+})
 const articleBodyReadyTick = ref(0)
 const isSidebarSummaryExpanded = ref(false)
 const isMiniMapExpanded = ref(false)
+const showFeedbackDialog = ref(false)
 const navRef = ref<HTMLElement | null>(null)
 const miniMapRef = ref<HTMLElement | null>(null)
 const navOverflowTop = ref(false)
 const navOverflowBottom = ref(false)
 const navHiddenTopCount = ref(0)
 const navHiddenBottomCount = ref(0)
+const pendingArticleTelemetry = ref<PendingArticleTelemetry | null>(null)
+const hasTrackedInitialArticle = ref(false)
+const handledRouteTraceIds = new Set<string>()
+let searchTelemetryTimer: ReturnType<typeof setTimeout> | null = null
 
 function findArticle(articleId: string) {
   return helpArticles.find(article => article.id === articleId) || null
@@ -106,6 +134,14 @@ function normalizeQuickFilterQuery(value: unknown): HelpQuickFilter {
 
 function normalizeSectionQuery(value: unknown) {
   return String(Array.isArray(value) ? value[0] : value || '').trim()
+}
+
+function normalizeTraceQuery(value: unknown, maxLength = 255) {
+  return String(Array.isArray(value) ? value[0] : value || '').trim().slice(0, maxLength)
+}
+
+function resolveSourcePageLabel() {
+  return String(route.name || '').trim() || String(route.path || '/help').replace(/^\//, '').split(/[?#]/)[0] || 'help'
 }
 
 function normalizeVisitedArticleIds(value: unknown) {
@@ -230,6 +266,16 @@ function writeUsageStats(nextStats: HelpUsageStats) {
   }
 }
 
+if (typeof window !== 'undefined') {
+  currentUserRole.value = readCurrentUserRole()
+  visitedArticleIds.value = normalizeVisitedArticleIds([
+    ...readVisitedArticleIds(),
+    selectedArticleId.value,
+  ])
+  pinnedArticleIds.value = readPinnedArticleIds()
+  usageStats.value = readUsageStats()
+}
+
 function syncSelectedArticle(articleId: string, options: { updateRoute?: boolean, clearSearch?: boolean, sectionId?: string } = {}) {
   const article = findArticle(articleId)
   if (!article)
@@ -261,8 +307,33 @@ function syncSelectedArticle(articleId: string, options: { updateRoute?: boolean
   }
 }
 
-function syncAudienceFilter(filter: HelpAudienceFilter, options: { updateRoute?: boolean } = {}) {
+function openArticle(articleId: string, options: { updateRoute?: boolean, clearSearch?: boolean, sectionId?: string, telemetry?: PendingArticleTelemetry } = {}) {
+  pendingArticleTelemetry.value = options.telemetry || null
+  syncSelectedArticle(articleId, options)
+}
+
+function syncAudienceFilter(filter: HelpAudienceFilter, options: { updateRoute?: boolean, trackEvent?: boolean } = {}) {
+  const previous = selectedAudienceFilter.value
+  const article = findArticle(selectedArticleId.value)
   selectedAudienceFilter.value = filter
+
+  if (options.trackEvent !== false && previous !== filter) {
+    trackHelpCenterEvent({
+      eventType: 'audience_filter_change',
+      articleId: article?.id,
+      articleTitle: article?.title,
+      articleCategory: article?.category,
+      sourcePage: 'help',
+      sourceRoute: route.fullPath,
+      sourceContext: 'help_audience_filter',
+      audienceFilter: filter,
+      quickFilter: selectedQuickFilter.value,
+      meta: {
+        fromFilter: previous,
+        toFilter: filter,
+      },
+    })
+  }
 
   if (options.updateRoute !== false) {
     const rawQueryAudience = Array.isArray(route.query[AUDIENCE_QUERY_KEY])
@@ -279,8 +350,28 @@ function syncAudienceFilter(filter: HelpAudienceFilter, options: { updateRoute?:
   }
 }
 
-function syncQuickFilter(filter: HelpQuickFilter, options: { updateRoute?: boolean } = {}) {
+function syncQuickFilter(filter: HelpQuickFilter, options: { updateRoute?: boolean, trackEvent?: boolean } = {}) {
+  const previous = selectedQuickFilter.value
+  const article = findArticle(selectedArticleId.value)
   selectedQuickFilter.value = filter
+
+  if (options.trackEvent !== false && previous !== filter) {
+    trackHelpCenterEvent({
+      eventType: 'quick_filter_change',
+      articleId: article?.id,
+      articleTitle: article?.title,
+      articleCategory: article?.category,
+      sourcePage: 'help',
+      sourceRoute: route.fullPath,
+      sourceContext: 'help_quick_filter',
+      audienceFilter: selectedAudienceFilter.value,
+      quickFilter: filter,
+      meta: {
+        fromFilter: previous,
+        toFilter: filter,
+      },
+    })
+  }
 
   if (options.updateRoute !== false) {
     const rawQueryFilter = Array.isArray(route.query[QUICK_FILTER_QUERY_KEY])
@@ -319,13 +410,13 @@ watch(() => route.query[ARTICLE_QUERY_KEY], (nextArticleId) => {
 watch(() => route.query[AUDIENCE_QUERY_KEY], (nextAudience) => {
   const normalized = normalizeAudienceQuery(nextAudience)
   if (selectedAudienceFilter.value !== normalized)
-    syncAudienceFilter(normalized, { updateRoute: false })
+    syncAudienceFilter(normalized, { updateRoute: false, trackEvent: false })
 }, { immediate: true })
 
 watch(() => route.query[QUICK_FILTER_QUERY_KEY], (nextQuickFilter) => {
   const normalized = normalizeQuickFilterQuery(nextQuickFilter)
   if (selectedQuickFilter.value !== normalized)
-    syncQuickFilter(normalized, { updateRoute: false })
+    syncQuickFilter(normalized, { updateRoute: false, trackEvent: false })
 }, { immediate: true })
 
 watch(() => route.query[SECTION_QUERY_KEY], (nextSection) => {
@@ -412,6 +503,46 @@ function trackArticleUsage(articleId: string) {
 function clearUsageStats() {
   usageStats.value = {}
   writeUsageStats({})
+}
+
+function buildTelemetryArticlePayload<T extends Partial<HelpCenterTelemetryEventInput>>(
+  article: HelpArticle | ResolvedHelpArticle | null,
+  overrides: T,
+): HelpCenterTelemetryEventInput & T {
+  return {
+    articleId: article?.id || '',
+    articleTitle: article?.title || '',
+    articleCategory: article?.category || '',
+    sourcePage: 'help',
+    sourceRoute: route.fullPath,
+    audienceFilter: selectedAudienceFilter.value,
+    quickFilter: selectedQuickFilter.value,
+    ...overrides,
+  } as HelpCenterTelemetryEventInput & T
+}
+
+function trackCurrentArticleLifecycle(articleId: string) {
+  const article = findArticle(articleId)
+  if (!article)
+    return
+
+  const pending = pendingArticleTelemetry.value
+  const isInitial = !hasTrackedInitialArticle.value
+  const eventType = pending?.eventType || (isInitial ? 'article_open' : 'article_switch')
+
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType,
+    sourceContext: pending?.sourceContext || (isInitial ? 'route_restore' : 'help_nav'),
+    meta: {
+      ...(pending?.meta || {}),
+      ...(eventType === 'article_open'
+        ? { openReason: pending?.openReason || 'route_restore' }
+        : { switchSource: pending?.switchSource || 'nav' }),
+    },
+  }))
+
+  pendingArticleTelemetry.value = null
+  hasTrackedInitialArticle.value = true
 }
 
 function matchesQuickFilter(article: HelpArticle, filter: HelpQuickFilter) {
@@ -899,6 +1030,13 @@ function copyCurrentPlainText() {
   void copyText(article.plainText, `${article.title} 已复制为纯文本`, {
     detail: '可直接粘贴到群消息、工单或备忘录中。',
   })
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType: 'copy_plain_text',
+    sourceContext: 'help_article_actions',
+    meta: {
+      copyKind: 'plain_text',
+    },
+  }))
 }
 
 function copyCurrentMarkdown() {
@@ -908,6 +1046,13 @@ function copyCurrentMarkdown() {
   void copyText(article.markdown.trim(), `${article.title} Markdown 已复制`, {
     detail: '原始 Markdown 内容已写入系统剪贴板。',
   })
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType: 'copy_markdown',
+    sourceContext: 'help_article_actions',
+    meta: {
+      copyKind: 'markdown',
+    },
+  }))
 }
 
 async function scrollToSection(sectionId: string, behavior: ScrollBehavior = 'smooth') {
@@ -928,7 +1073,7 @@ async function scrollToSection(sectionId: string, behavior: ScrollBehavior = 'sm
   return false
 }
 
-function jumpToOutline(item: HelpArticleOutlineItem) {
+async function jumpToOutline(item: HelpArticleOutlineItem) {
   const article = currentArticle.value
   if (!article)
     return
@@ -937,7 +1082,20 @@ function jumpToOutline(item: HelpArticleOutlineItem) {
     clearSearch: false,
     sectionId: item.id,
   })
-  void scrollToSection(item.id)
+
+  const trace = createHelpCenterJumpTrace(buildTelemetryArticlePayload(article, {
+    eventType: 'outline_jump',
+    sourceContext: 'help_outline_panel',
+    sectionId: item.id,
+    sectionTitle: item.text,
+  }))
+  const success = await scrollToSection(item.id)
+  trace.finish({
+    sectionId: item.id,
+    sectionTitle: item.text,
+    result: success ? 'success' : 'failed',
+    errorCode: success ? '' : 'anchor_missing',
+  })
 }
 
 function getAudienceTone(article: HelpArticle | null) {
@@ -951,7 +1109,17 @@ function getAudienceTone(article: HelpArticle | null) {
 }
 
 function openReleaseHighlights() {
-  syncSelectedArticle('release-highlights')
+  trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+    eventType: 'release_highlights_open',
+    sourceContext: 'help_release_sync_card',
+  }))
+  openArticle('release-highlights', {
+    telemetry: {
+      eventType: 'article_switch',
+      switchSource: 'release',
+      sourceContext: 'help_release_sync_card',
+    },
+  })
 }
 
 function getGovernanceCadence(article: HelpArticle | null) {
@@ -1025,6 +1193,13 @@ function copyGovernanceTemplate(type: 'outdated' | 'suggestion') {
   void copyText(template, type === 'outdated' ? '过期反馈模板已复制' : '补充建议模板已复制', {
     detail: '可以直接粘贴到群消息、工单或文档修订记录里。',
   })
+  trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+    eventType: 'governance_template_copy',
+    sourceContext: 'help_governance_panel',
+    meta: {
+      templateType: type,
+    },
+  }))
 }
 
 function copyGovernanceTaskTemplate() {
@@ -1059,6 +1234,13 @@ function copyGovernanceTaskTemplate() {
   void copyText(template, '治理任务模板已复制', {
     detail: '可以直接粘贴到工单、Issue 或修订记录里继续跟踪。',
   })
+  trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+    eventType: 'governance_template_copy',
+    sourceContext: 'help_governance_panel',
+    meta: {
+      templateType: 'task',
+    },
+  }))
 }
 
 function copyCurrentArticleLink() {
@@ -1082,6 +1264,159 @@ function copyCurrentArticleLink() {
 
   void copyText(url, '文章链接已复制', {
     detail: '分享给团队时会保留当前文章和阅读视角。',
+  })
+}
+
+function handleArticleBodyCopy(payload: { kind: 'code_block' | 'command_block', language: string }) {
+  trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+    eventType: payload.kind === 'command_block' ? 'copy_command_block' : 'copy_code_block',
+    sourceContext: 'help_article_body',
+    meta: {
+      copyKind: payload.kind,
+      codeLanguage: payload.language || 'text',
+    },
+  }))
+}
+
+async function openRelatedRoute(relatedRoute: { label: string, to: string }) {
+  const article = currentArticle.value
+  if (!article)
+    return
+
+  const trace = createHelpCenterJumpTrace(buildTelemetryArticlePayload(article, {
+    eventType: 'related_route_click',
+    sourceContext: 'help_related_route',
+    targetRoute: relatedRoute.to,
+    meta: {
+      relatedRouteLabel: relatedRoute.label,
+      targetRouteName: relatedRoute.to,
+    },
+  }))
+
+  try {
+    const failure = await router.push(relatedRoute.to)
+    trace.finish({
+      targetRoute: relatedRoute.to,
+      result: failure && isNavigationFailure(failure) ? 'failed' : 'success',
+      errorCode: failure && isNavigationFailure(failure) ? 'router_cancelled' : '',
+    })
+  }
+  catch {
+    trace.finish({
+      targetRoute: relatedRoute.to,
+      result: 'failed',
+      errorCode: 'route_not_found',
+    })
+  }
+}
+
+function openFeedbackForCurrentArticle() {
+  showFeedbackDialog.value = true
+}
+
+function handleFeedbackSubmitted(payload: { id: number, feedbackNo: string, status: string }) {
+  toast.success(`反馈已提交：${payload.feedbackNo}`)
+  trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+    eventType: 'feedback_submit',
+    sourceContext: 'help_feedback_dialog',
+    meta: {
+      feedbackId: payload.id,
+      feedbackNo: payload.feedbackNo,
+      feedbackStatus: payload.status,
+      feedbackSubmitted: true,
+    },
+  }))
+}
+
+async function handlePendingRouteTrace() {
+  const traceId = normalizeTraceQuery(route.query[TRACE_QUERY_KEY], 64)
+  if (!traceId || handledRouteTraceIds.has(traceId))
+    return
+
+  const article = currentArticle.value
+  if (!article)
+    return
+
+  let result: 'success' | 'failed' = 'success'
+  let errorCode = ''
+  let sectionTitle = ''
+  if (selectedSectionId.value) {
+    const outlineItem = articleOutline.value.find(item => item.id === selectedSectionId.value)
+    sectionTitle = outlineItem?.text || ''
+    const scrolled = await scrollToSection(selectedSectionId.value, 'auto')
+    if (!scrolled) {
+      result = 'failed'
+      errorCode = 'anchor_missing'
+    }
+  }
+
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType: 'context_help_open',
+    traceId,
+    sourcePage: normalizeTraceQuery(route.query[TRACE_SOURCE_PAGE_QUERY_KEY], 80) || resolveSourcePageLabel(),
+    sourceRoute: normalizeTraceQuery(route.query[TRACE_SOURCE_ROUTE_QUERY_KEY], 255) || route.fullPath,
+    sourceContext: normalizeTraceQuery(route.query[TRACE_SOURCE_CONTEXT_QUERY_KEY], 120) || 'context_help_button',
+    targetRoute: route.fullPath,
+    sectionId: selectedSectionId.value,
+    sectionTitle,
+    result,
+    errorCode,
+    meta: {
+      fromContextHelp: true,
+    },
+  }))
+  handledRouteTraceIds.add(traceId)
+
+  void router.replace({
+    query: {
+      ...route.query,
+      [TRACE_QUERY_KEY]: undefined,
+      [TRACE_SOURCE_PAGE_QUERY_KEY]: undefined,
+      [TRACE_SOURCE_ROUTE_QUERY_KEY]: undefined,
+      [TRACE_SOURCE_CONTEXT_QUERY_KEY]: undefined,
+    },
+  })
+}
+
+function openSearchResult(article: HelpArticle, rank: number) {
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType: 'search_result_click',
+    sourceContext: 'help_search_results',
+    meta: {
+      searchKeyword: searchQuery.value.trim(),
+      resultRank: rank,
+    },
+  }))
+  openArticle(article.id, {
+    telemetry: {
+      eventType: 'article_switch',
+      switchSource: 'search',
+      sourceContext: 'help_search_results',
+      meta: {
+        searchKeyword: searchQuery.value.trim(),
+        resultRank: rank,
+      },
+    },
+  })
+}
+
+function openFrequentUsageArticle(article: HelpArticle, openCount: number) {
+  trackHelpCenterEvent(buildTelemetryArticlePayload(article, {
+    eventType: 'frequent_shortcut_click',
+    sourceContext: 'help_usage_card',
+    meta: {
+      openCount,
+    },
+  }))
+  openArticle(article.id, {
+    telemetry: {
+      eventType: 'article_switch',
+      switchSource: 'frequent',
+      sourceContext: 'help_usage_card',
+      meta: {
+        openCount,
+      },
+    },
   })
 }
 
@@ -1145,12 +1480,32 @@ watch(() => currentArticle.value?.id, (articleId) => {
 
   markArticleVisited(articleId)
   trackArticleUsage(articleId)
+  trackCurrentArticleLifecycle(articleId)
   void ensureCurrentArticleLoaded(articleId)
 }, { immediate: true })
 
-watch(searchQuery, (value) => {
+watch(searchQuery, (value, previousValue) => {
   if (value.trim())
     void ensureSearchIndexLoaded()
+
+  const keyword = value.trim()
+  if (searchTelemetryTimer) {
+    clearTimeout(searchTelemetryTimer)
+    searchTelemetryTimer = null
+  }
+  if (!keyword || keyword === previousValue.trim())
+    return
+
+  searchTelemetryTimer = setTimeout(() => {
+    trackHelpCenterEvent(buildTelemetryArticlePayload(currentArticle.value, {
+      eventType: 'search_submit',
+      sourceContext: 'help_search_input',
+      meta: {
+        searchKeyword: keyword,
+        keywordLength: keyword.length,
+      },
+    }))
+  }, 280)
 })
 
 watch(
@@ -1159,6 +1514,13 @@ watch(
     if (!articleId || !sectionId)
       return
     await scrollToSection(String(sectionId), 'auto')
+  },
+)
+
+watch(
+  () => [currentArticleContent.value?.id, selectedSectionId.value, articleBodyReadyTick.value, route.query[TRACE_QUERY_KEY]],
+  async () => {
+    await handlePendingRouteTrace()
   },
 )
 
@@ -1221,13 +1583,17 @@ onMounted(() => {
     })
   }
   if (String(rawAudience || '').trim() && String(rawAudience || '').trim() !== normalizedAudience)
-    syncAudienceFilter(normalizedAudience)
+    syncAudienceFilter(normalizedAudience, { trackEvent: false })
   else
-    syncAudienceFilter(normalizedAudience, { updateRoute: false })
+    syncAudienceFilter(normalizedAudience, { updateRoute: false, trackEvent: false })
   if (String(rawQuickFilter || '').trim() && String(rawQuickFilter || '').trim() !== normalizedQuickFilter)
-    syncQuickFilter(normalizedQuickFilter)
+    syncQuickFilter(normalizedQuickFilter, { trackEvent: false })
   else
-    syncQuickFilter(normalizedQuickFilter, { updateRoute: false })
+    syncQuickFilter(normalizedQuickFilter, { updateRoute: false, trackEvent: false })
+  initializeHelpCenterTelemetry()
+  void fetchHelpCenterObservabilityConfig().then((config) => {
+    observabilityConfig.value = config
+  })
   void syncActiveNavItemIntoView('auto')
   void syncActiveMiniMapItemIntoView('auto')
   void nextTick(() => {
@@ -1239,6 +1605,10 @@ onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('storage', handleStorageChange)
     window.removeEventListener('resize', updateNavOverflow)
+  }
+  if (searchTelemetryTimer) {
+    clearTimeout(searchTelemetryTimer)
+    searchTelemetryTimer = null
   }
 })
 </script>
@@ -1403,7 +1773,7 @@ onBeforeUnmount(() => {
                         'help-nav-mini-map__item--active': item.active,
                         'help-nav-mini-map__item--passed': item.passed,
                       }"
-                      @click="syncSelectedArticle(item.article.id)"
+                      @click="openArticle(item.article.id, { telemetry: { eventType: 'article_switch', switchSource: 'mini_map', sourceContext: 'help_nav_mini_map' } })"
                     >
                       <span class="help-nav-mini-map__index">{{ item.order }}</span>
                       <span class="help-nav-mini-map__title">{{ item.article.title }}</span>
@@ -1415,7 +1785,7 @@ onBeforeUnmount(() => {
                       v-if="activeCategoryMiniMap.previous"
                       type="button"
                       class="help-nav-mini-map__neighbor"
-                      @click="syncSelectedArticle(activeCategoryMiniMap.previous.id)"
+                      @click="openArticle(activeCategoryMiniMap.previous.id, { telemetry: { eventType: 'article_switch', switchSource: 'mini_map', sourceContext: 'help_nav_neighbor' } })"
                     >
                       <span class="help-nav-mini-map__neighbor-label">上一篇</span>
                       <span class="help-nav-mini-map__neighbor-title">{{ activeCategoryMiniMap.previous.title }}</span>
@@ -1424,7 +1794,7 @@ onBeforeUnmount(() => {
                       v-if="activeCategoryMiniMap.next"
                       type="button"
                       class="help-nav-mini-map__neighbor"
-                      @click="syncSelectedArticle(activeCategoryMiniMap.next.id)"
+                      @click="openArticle(activeCategoryMiniMap.next.id, { telemetry: { eventType: 'article_switch', switchSource: 'mini_map', sourceContext: 'help_nav_neighbor' } })"
                     >
                       <span class="help-nav-mini-map__neighbor-label">下一篇</span>
                       <span class="help-nav-mini-map__neighbor-title">{{ activeCategoryMiniMap.next.title }}</span>
@@ -1460,7 +1830,7 @@ onBeforeUnmount(() => {
                     type="button"
                     class="help-nav-pins__item"
                     :class="{ 'help-nav-pins__item--active': selectedArticleId === article.id && !isSearching }"
-                    @click="syncSelectedArticle(article.id)"
+                    @click="openArticle(article.id, { telemetry: { eventType: 'article_switch', switchSource: 'pinned', sourceContext: 'help_pinned_articles' } })"
                   >
                     <div class="i-carbon-star-filled help-nav-pins__icon" />
                     <span class="help-nav-pins__title">{{ article.title }}</span>
@@ -1490,7 +1860,7 @@ onBeforeUnmount(() => {
                     type="button"
                     class="help-nav-history__item"
                     :class="{ 'help-nav-history__item--active': selectedArticleId === article.id && !isSearching }"
-                    @click="syncSelectedArticle(article.id)"
+                    @click="openArticle(article.id, { telemetry: { eventType: 'article_switch', switchSource: 'history', sourceContext: 'help_recent_history' } })"
                   >
                     <div class="text-sm" :class="article.icon" />
                     <span class="help-nav-history__title">{{ article.title }}</span>
@@ -1566,7 +1936,7 @@ onBeforeUnmount(() => {
                           'help-nav-item--visited': hasVisitedArticle(article.id),
                         }"
                         :data-help-article-id="article.id"
-                        @click="syncSelectedArticle(article.id)"
+                        @click="openArticle(article.id, { telemetry: { eventType: 'article_switch', switchSource: 'nav', sourceContext: 'help_library_nav' } })"
                       >
                         <div class="help-nav-item__main">
                           <div class="text-base" :class="article.icon" />
@@ -1797,8 +2167,8 @@ onBeforeUnmount(() => {
                   :key="`${currentArticle.id}-${relatedRoute.to}`"
                   variant="secondary"
                   size="sm"
-                  :to="relatedRoute.to"
                   class="help-route-chip"
+                  @click="openRelatedRoute(relatedRoute)"
                 >
                   {{ relatedRoute.label }}
                 </BaseButton>
@@ -1810,11 +2180,11 @@ onBeforeUnmount(() => {
         <section v-if="isSearching" class="glass-panel min-h-0 flex-1 rounded-[1.9rem] p-5 shadow-sm lg:p-6">
           <div v-if="searchResults.length" class="help-search-results">
             <button
-              v-for="item in searchResults"
+              v-for="(item, index) in searchResults"
               :key="item.article.id"
               type="button"
               class="help-result-card"
-              @click="syncSelectedArticle(item.article.id)"
+              @click="openSearchResult(item.article, index + 1)"
             >
               <div class="help-result-card__icon">
                 <div class="text-xl" :class="item.article.icon" />
@@ -1881,7 +2251,11 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="help-article-prose-shell">
-                <HelpArticleBody :article="currentArticleContent" @ready="handleArticleBodyReady" />
+                <HelpArticleBody
+                  :article="currentArticleContent"
+                  @ready="handleArticleBodyReady"
+                  @copy="handleArticleBodyCopy"
+                />
               </div>
 
               <div v-if="currentArticle?.timeline?.length || currentArticle" class="help-article-lower-grid">
@@ -1983,6 +2357,15 @@ onBeforeUnmount(() => {
                       复制治理任务
                     </BaseButton>
                     <BaseButton
+                      v-if="observabilityConfig.feedbackEnabled"
+                      variant="secondary"
+                      size="sm"
+                      icon-class="i-carbon-chat"
+                      @click="openFeedbackForCurrentArticle"
+                    >
+                      提交反馈
+                    </BaseButton>
+                    <BaseButton
                       variant="ghost"
                       size="sm"
                       icon-class="i-carbon-link"
@@ -2042,7 +2425,7 @@ onBeforeUnmount(() => {
                       :key="`usage-${item.article.id}`"
                       type="button"
                       class="help-usage-item"
-                      @click="syncSelectedArticle(item.article.id)"
+                      @click="openFrequentUsageArticle(item.article, item.openCount)"
                     >
                       <div class="help-usage-item__meta">
                         <BaseBadge surface="meta" tone="brand" class="rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -2075,7 +2458,7 @@ onBeforeUnmount(() => {
                       :key="item.article.id"
                       type="button"
                       class="help-must-read-item"
-                      @click="syncSelectedArticle(item.article.id)"
+                      @click="openArticle(item.article.id, { telemetry: { eventType: 'article_switch', switchSource: 'must_read', sourceContext: 'help_continue_reading' } })"
                     >
                       <div class="help-must-read-item__meta">
                         <BaseBadge surface="meta" tone="brand" class="rounded-full px-2 py-0.5 text-[10px] font-bold">
@@ -2107,6 +2490,21 @@ onBeforeUnmount(() => {
         </section>
       </main>
     </div>
+
+    <HelpFeedbackDialog
+      v-if="currentArticle"
+      v-model:show="showFeedbackDialog"
+      :article-id="currentArticle.id"
+      :article-title="currentArticle.title"
+      :section-id="selectedSectionId"
+      :section-title="articleOutline.find(item => item.id === selectedSectionId)?.text || ''"
+      source-page="help"
+      :source-route="route.fullPath"
+      source-context="help_governance_panel"
+      :audience-filter="selectedAudienceFilter"
+      :quick-filter="selectedQuickFilter"
+      @submitted="handleFeedbackSubmitted"
+    />
   </div>
 </template>
 

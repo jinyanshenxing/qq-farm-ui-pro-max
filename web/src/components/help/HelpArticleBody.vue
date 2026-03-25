@@ -9,6 +9,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   (e: 'ready', articleId: string): void
+  (e: 'copy', payload: { kind: 'code_block' | 'command_block', language: string }): void
 }>()
 
 const bodyRef = ref<HTMLElement | null>(null)
@@ -120,6 +121,10 @@ async function decorateArticleBody() {
     button.addEventListener('click', () => {
       void copyText(rawText, copyMessage, {
         title: '复制成功',
+      })
+      emit('copy', {
+        kind: isCommandBlock(language, rawText) ? 'command_block' : 'code_block',
+        language: language.trim().toLowerCase(),
       })
     })
 

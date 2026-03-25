@@ -161,7 +161,181 @@ test('announcement sync route deduplicates parsed entries before saving', async 
         createdBy: 'system_sync',
     }]);
     assert.deepEqual(ioCalls, [['announcement:update', { ok: true }]]);
-    assert.deepEqual(res.body, { ok: true, added: 1, totalParsed: 2 });
+    assert.deepEqual(res.body, {
+        ok: true,
+        data: {
+            added: 1,
+            updated: 0,
+            skipped: 1,
+            totalParsed: 2,
+            latestVersion: 'v2',
+            sources: { update_log: 2 },
+            sourceStats: { update_log: 2 },
+            previewCount: 1,
+            entries: [
+                {
+                    title: '新公告',
+                    version: 'v2',
+                    publishDate: '2026-03-09',
+                    summary: 'new',
+                    sourceType: 'update_log',
+                    releaseUrl: '',
+                },
+                {
+                    title: '旧公告',
+                    version: 'v1',
+                    publishDate: '2026-03-08',
+                    summary: 'old',
+                    sourceType: 'update_log',
+                    releaseUrl: '',
+                },
+            ],
+        },
+        added: 1,
+        updated: 0,
+        skipped: 1,
+        totalParsed: 2,
+        latestVersion: 'v2',
+        sources: { update_log: 2 },
+        sourceStats: { update_log: 2 },
+        previewCount: 1,
+        entries: [
+            {
+                title: '新公告',
+                version: 'v2',
+                publishDate: '2026-03-09',
+                summary: 'new',
+                sourceType: 'update_log',
+                releaseUrl: '',
+            },
+            {
+                title: '旧公告',
+                version: 'v1',
+                publishDate: '2026-03-08',
+                summary: 'old',
+                sourceType: 'update_log',
+                releaseUrl: '',
+            },
+        ],
+    });
+});
+
+test('announcement sync route prefers structured materializer results when provided', async () => {
+    const { app, routes } = createFakeApp();
+    const ioCalls = [];
+    const deps = createDeps({
+        app,
+        syncAnnouncements: async () => ({
+            added: 2,
+            updated: 1,
+            skipped: 3,
+            totalParsed: 6,
+            latestVersion: 'v4.5.40',
+            sources: { release_cache: 4, embedded: 2 },
+            entries: [
+                { title: '版本更新', version: 'v4.5.40', publishDate: '2026-03-25', summary: '修复与优化', sourceType: 'release_cache' },
+            ],
+        }),
+        getIo: () => ({
+            emit: (...args) => ioCalls.push(args),
+        }),
+    });
+
+    registerAnnouncementAdminRoutes(deps);
+    const { handler } = getRouteParts(routes, 'post', '/api/announcement/sync');
+    const res = createResponse();
+    await handler({ currentUser: { role: 'admin' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(ioCalls, [['announcement:update', { ok: true }]]);
+    assert.deepEqual(res.body, {
+        ok: true,
+        data: {
+            added: 2,
+            updated: 1,
+            skipped: 3,
+            totalParsed: 6,
+            latestVersion: 'v4.5.40',
+            sources: { release_cache: 4, embedded: 2 },
+            sourceStats: { release_cache: 4, embedded: 2 },
+            previewCount: 3,
+            entries: [
+                {
+                    title: '版本更新',
+                    version: 'v4.5.40',
+                    publishDate: '2026-03-25',
+                    summary: '修复与优化',
+                    sourceType: 'release_cache',
+                    releaseUrl: '',
+                },
+            ],
+        },
+        added: 2,
+        updated: 1,
+        skipped: 3,
+        totalParsed: 6,
+        latestVersion: 'v4.5.40',
+        sources: { release_cache: 4, embedded: 2 },
+        sourceStats: { release_cache: 4, embedded: 2 },
+        previewCount: 3,
+        entries: [
+            {
+                title: '版本更新',
+                version: 'v4.5.40',
+                publishDate: '2026-03-25',
+                summary: '修复与优化',
+                sourceType: 'release_cache',
+                releaseUrl: '',
+            },
+        ],
+    });
+});
+
+test('announcement sync route supports dry run without emitting updates', async () => {
+    const { app, routes } = createFakeApp();
+    const syncCalls = [];
+    const ioCalls = [];
+    const deps = createDeps({
+        app,
+        syncAnnouncements: async (payload) => {
+            syncCalls.push(payload);
+            return {
+                added: 1,
+                updated: 0,
+                skipped: 2,
+                totalParsed: 3,
+                latestVersion: 'v4.5.41',
+                sources: { embedded: 3 },
+            };
+        },
+        getIo: () => ({
+            emit: (...args) => ioCalls.push(args),
+        }),
+    });
+
+    registerAnnouncementAdminRoutes(deps);
+    const { handler } = getRouteParts(routes, 'post', '/api/announcement/sync');
+    const res = createResponse();
+    await handler({
+        body: {
+            dryRun: true,
+            sourceTypes: ['embedded'],
+            previewLimit: 2,
+        },
+        currentUser: { username: 'ops-admin', role: 'admin' },
+    }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(syncCalls, [{
+        createdBy: 'ops-admin',
+        sourceTypes: ['embedded'],
+        dryRun: true,
+        limit: undefined,
+        markInstalled: undefined,
+    }]);
+    assert.deepEqual(ioCalls, []);
+    assert.equal(res.body.previewCount, 1);
+    assert.equal(res.body.data.latestVersion, 'v4.5.41');
 });
 
 test('third-party api get route blocks non-admin users', async () => {

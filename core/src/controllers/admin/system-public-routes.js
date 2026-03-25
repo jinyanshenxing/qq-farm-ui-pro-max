@@ -448,12 +448,15 @@ function registerSystemPublicRoutes({
 
 function registerNotificationsRoute({
     app,
+    getNotificationEntries,
     parseUpdateLog,
 }) {
     app.get('/api/notifications', async (req, res) => {
         try {
             const limit = Number.parseInt(req.query.limit) || 10;
-            const entries = parseUpdateLog();
+            const entries = typeof getNotificationEntries === 'function'
+                ? await Promise.resolve(getNotificationEntries({ limit }))
+                : parseUpdateLog();
             res.json({ ok: true, data: entries.slice(0, limit) });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
