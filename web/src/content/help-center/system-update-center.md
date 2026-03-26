@@ -151,13 +151,14 @@ systemctl status qq-farm-update-agent
 ```bash
 cd /opt/qq-farm-current
 bash smoke-system-update-center.sh \
-  --base-url http://127.0.0.1:9527 \
   --username admin \
   --password '你的管理员密码' \
   --deploy-dir /opt/qq-farm-current
 ```
 
-它会检查更新中心、公告同步 dry-run、独立预检、最近任务详情和宿主机核验，并把结果写到 `reports/system-update-smoke/<timestamp>/SUMMARY.md`。
+它会检查更新中心、公告同步 dry-run、独立预检、最近任务详情和宿主机核验，并把结果写到 `reports/system-update-smoke/<timestamp>/SUMMARY.md`。如果传了 `--deploy-dir`，脚本会自动读取对应 `.env` 里的 `WEB_PORT` 来拼出默认 `base-url`。
+
+如果宿主机没有安装 `node`，当前版本会自动借用正在运行的主程序容器里的 `node` 完成 JSON 解析；前提是 Docker 可用，且应用容器已经正常启动。
 
 ## 建议
 

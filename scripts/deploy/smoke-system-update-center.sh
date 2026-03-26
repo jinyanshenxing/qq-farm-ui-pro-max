@@ -2,7 +2,8 @@
 
 set -Eeuo pipefail
 
-BASE_URL="${BASE_URL:-http://127.0.0.1:9527}"
+BASE_URL_INPUT="${BASE_URL:-}"
+BASE_URL="${BASE_URL_INPUT:-}"
 USERNAME="${SMOKE_USERNAME:-}"
 PASSWORD="${SMOKE_PASSWORD:-}"
 ADMIN_TOKEN="${SMOKE_ADMIN_TOKEN:-}"
@@ -11,6 +12,16 @@ TARGET_SCOPE="${TARGET_SCOPE:-worker}"
 TARGET_STRATEGY="${TARGET_STRATEGY:-rolling}"
 TARGET_AGENT_IDS="${TARGET_AGENT_IDS:-}"
 DEPLOY_DIR="${DEPLOY_DIR:-}"
+DEPLOY_BASE_DIR="${DEPLOY_BASE_DIR:-/opt}"
+STACK_NAME="${STACK_NAME:-qq-farm}"
+WEB_PORT="${WEB_PORT:-3080}"
+CURRENT_LINK_INPUT="${CURRENT_LINK:-}"
+CURRENT_LINK="${CURRENT_LINK_INPUT:-${DEPLOY_BASE_DIR}/qq-farm-current}"
+APP_CONTAINER_NAME_INPUT="${APP_CONTAINER_NAME:-}"
+APP_CONTAINER_NAME="${APP_CONTAINER_NAME_INPUT:-${STACK_NAME}-bot}"
+REPO_SLUG="${REPO_SLUG:-smdk000/qq-farm-ui-pro-max}"
+REPO_REF="${REPO_REF:-main}"
+RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com/${REPO_SLUG}/${REPO_REF}}"
 SKIP_VERIFY_STACK="${SKIP_VERIFY_STACK:-0}"
 REPORT_DIR="${REPORT_DIR:-}"
 CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-8}"
@@ -18,6 +29,7 @@ CURL_MAX_TIME="${CURL_MAX_TIME:-30}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY_STACK_PATH="${SCRIPT_DIR}/verify-stack.sh"
+STACK_LAYOUT_PATH="${SCRIPT_DIR}/stack-layout.sh"
 TMP_DIR=""
 COOKIE_JAR=""
 PASS_COUNT=0
@@ -26,6 +38,15 @@ FAIL_COUNT=0
 PASS_LINES=()
 WARN_LINES=()
 FAIL_LINES=()
+DOCKER=(docker)
+SUDO=""
+BASE_URL_EXPLICIT=0
+CURRENT_LINK_EXPLICIT=0
+APP_CONTAINER_NAME_EXPLICIT=0
+STACK_DIR_NAME=""
+NODE_RUNTIME_MODE=""
+NODE_RUNTIME_LABEL=""
+NODE_RUNTIME_RESOLVED=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -37,6 +58,35 @@ print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+if [ ! -f "${STACK_LAYOUT_PATH}" ]; then
+    BOOTSTRAP_DIR="${TMPDIR:-/tmp}/qq-farm-deploy-bootstrap/${REPO_SLUG//\//_}/${REPO_REF}"
+    mkdir -p "${BOOTSTRAP_DIR}"
+    STACK_LAYOUT_PATH="${BOOTSTRAP_DIR}/stack-layout.sh"
+    if [ ! -f "${STACK_LAYOUT_PATH}" ]; then
+        command -v curl >/dev/null 2>&1 || {
+            echo "[ERROR] 缺少 stack-layout.sh 且系统未安装 curl，无法继续执行。" >&2
+            exit 1
+        }
+        curl -fsSL "${RAW_BASE_URL}/scripts/deploy/stack-layout.sh" -o "${STACK_LAYOUT_PATH}"
+    fi
+fi
+# shellcheck source=stack-layout.sh
+. "${STACK_LAYOUT_PATH}"
+
+if [ -n "${CURRENT_LINK_INPUT}" ]; then
+    CURRENT_LINK_EXPLICIT=1
+fi
+if [ -n "${APP_CONTAINER_NAME_INPUT}" ]; then
+    APP_CONTAINER_NAME_EXPLICIT=1
+fi
+if [ -n "${BASE_URL_INPUT}" ]; then
+    BASE_URL_EXPLICIT=1
+fi
+
+if [ "${EUID:-$(id -u)}" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    SUDO="sudo"
+fi
 
 cleanup() {
     if [ -n "${COOKIE_JAR}" ] && [ -f "${COOKIE_JAR}" ]; then
@@ -80,7 +130,8 @@ json_quote() {
 }
 
 csv_to_json_array() {
-    node -e '
+    ensure_node_runtime
+    node_eval '
 const input = String(process.argv[1] || "");
 const values = input.split(",").map(item => item.trim()).filter(Boolean);
 process.stdout.write(JSON.stringify(values));
@@ -88,11 +139,24 @@ process.stdout.write(JSON.stringify(values));
 }
 
 json_get() {
-    node -e '
-const fs = require("node:fs");
-const [filePath, queryPath, fallback] = process.argv.slice(1);
-try {
-  const text = fs.readFileSync(filePath, "utf8");
+    local file_path="$1"
+    local query_path="$2"
+    local fallback="${3:-}"
+    if [ ! -f "${file_path}" ]; then
+        printf '%s' "${fallback}"
+        return 0
+    fi
+
+    ensure_node_runtime
+    node_eval_with_stdin_file '
+let text = "";
+const [queryPath, fallback] = process.argv.slice(1);
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  text += chunk;
+});
+process.stdin.on("end", () => {
+  try {
   const data = JSON.parse(text);
   const segments = String(queryPath || "").split(".").filter(Boolean);
   let current = data;
@@ -103,25 +167,38 @@ try {
     }
     current = /^\d+$/.test(segment) ? current[Number(segment)] : current[segment];
   }
-  if (current === undefined || current === null || current === "") {
+    if (current === undefined || current === null || current === "") {
+      process.stdout.write(String(fallback || ""));
+    } else if (typeof current === "object") {
+      process.stdout.write(JSON.stringify(current));
+    } else {
+      process.stdout.write(String(current));
+    }
+  } catch {
     process.stdout.write(String(fallback || ""));
-  } else if (typeof current === "object") {
-    process.stdout.write(JSON.stringify(current));
-  } else {
-    process.stdout.write(String(current));
   }
-} catch {
-  process.stdout.write(String(fallback || ""));
-}
-' "$1" "$2" "${3:-}"
+});
+' "${file_path}" "${query_path}" "${fallback}"
 }
 
 json_array_length() {
-    node -e '
-const fs = require("node:fs");
-const [filePath, queryPath] = process.argv.slice(1);
-try {
-  const text = fs.readFileSync(filePath, "utf8");
+    local file_path="$1"
+    local query_path="$2"
+    if [ ! -f "${file_path}" ]; then
+        printf '0'
+        return 0
+    fi
+
+    ensure_node_runtime
+    node_eval_with_stdin_file '
+let text = "";
+const [queryPath] = process.argv.slice(1);
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", chunk => {
+  text += chunk;
+});
+process.stdin.on("end", () => {
+  try {
   const data = JSON.parse(text);
   const segments = String(queryPath || "").split(".").filter(Boolean);
   let current = data;
@@ -132,11 +209,12 @@ try {
     }
     current = /^\d+$/.test(segment) ? current[Number(segment)] : current[segment];
   }
-  process.stdout.write(String(Array.isArray(current) ? current.length : 0));
-} catch {
-  process.stdout.write("0");
-}
-' "$1" "$2"
+    process.stdout.write(String(Array.isArray(current) ? current.length : 0));
+  } catch {
+    process.stdout.write("0");
+  }
+});
+' "${file_path}" "${query_path}"
 }
 
 ensure_deps() {
@@ -144,10 +222,7 @@ ensure_deps() {
         print_error "当前环境缺少 curl。"
         exit 1
     }
-    command -v node >/dev/null 2>&1 || {
-        print_error "当前环境缺少 node。"
-        exit 1
-    }
+    ensure_node_runtime
 }
 
 parse_args() {
@@ -155,6 +230,7 @@ parse_args() {
         case "$1" in
             --base-url)
                 BASE_URL="${2:-}"
+                BASE_URL_EXPLICIT=1
                 shift 2
                 ;;
             --username)
@@ -214,6 +290,152 @@ init_runtime_paths() {
     mkdir -p "${REPORT_DIR}"
 }
 
+refresh_base_url_default() {
+    if [ "${BASE_URL_EXPLICIT}" = "1" ]; then
+        return 0
+    fi
+    BASE_URL="http://127.0.0.1:${WEB_PORT:-3080}"
+}
+
+refresh_stack_layout() {
+    STACK_NAME="$(normalize_stack_name "${STACK_NAME:-qq-farm}")"
+    STACK_DIR_NAME="$(stack_dir_name "${STACK_NAME}")"
+    if [ "${APP_CONTAINER_NAME_EXPLICIT}" != "1" ]; then
+        APP_CONTAINER_NAME="$(stack_container_name "${STACK_NAME}" "bot")"
+    fi
+    if [ "${CURRENT_LINK_EXPLICIT}" != "1" ]; then
+        CURRENT_LINK="$(stack_current_link_path "${DEPLOY_BASE_DIR}" "${STACK_NAME}")"
+    fi
+}
+
+load_deploy_env() {
+    local file="$1"
+    if [ -f "${file}" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        . "${file}"
+        set +a
+        if [ -n "${APP_CONTAINER_NAME:-}" ]; then
+            APP_CONTAINER_NAME_EXPLICIT=1
+        fi
+        refresh_stack_layout
+        refresh_base_url_default
+    fi
+}
+
+canonicalize_dir() {
+    local dir="$1"
+    if [ -d "${dir}" ]; then
+        (cd "${dir}" && pwd -P)
+    fi
+}
+
+resolve_deploy_dir() {
+    if [ -n "${DEPLOY_DIR}" ] && [ -f "${DEPLOY_DIR}/docker-compose.yml" ]; then
+        DEPLOY_DIR="$(canonicalize_dir "${DEPLOY_DIR}")"
+        load_deploy_env "${DEPLOY_DIR}/.env"
+        return 0
+    fi
+
+    if [ -f "./docker-compose.yml" ]; then
+        DEPLOY_DIR="$(canonicalize_dir ".")"
+        load_deploy_env "${DEPLOY_DIR}/.env"
+        return 0
+    fi
+
+    if [ -L "${CURRENT_LINK}" ] || [ -d "${CURRENT_LINK}" ]; then
+        if [ -f "${CURRENT_LINK}/docker-compose.yml" ]; then
+            DEPLOY_DIR="$(canonicalize_dir "${CURRENT_LINK}")"
+            load_deploy_env "${DEPLOY_DIR}/.env"
+            return 0
+        fi
+    fi
+
+    local latest=""
+    latest="$(find "${DEPLOY_BASE_DIR}" -mindepth 2 -maxdepth 2 -type d -name "${STACK_DIR_NAME:-$(stack_dir_name "${STACK_NAME}")}" 2>/dev/null | sort | tail -n 1)"
+    if [ -n "${latest}" ] && [ -f "${latest}/docker-compose.yml" ]; then
+        DEPLOY_DIR="$(canonicalize_dir "${latest}")"
+        load_deploy_env "${DEPLOY_DIR}/.env"
+        return 0
+    fi
+
+    return 1
+}
+
+ensure_docker() {
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "宿主机未安装 node，且当前环境未检测到 Docker，无法使用应用容器完成 JSON 解析。"
+        exit 1
+    fi
+
+    if docker info >/dev/null 2>&1; then
+        DOCKER=(docker)
+    elif [ -n "${SUDO}" ] && "${SUDO}" docker info >/dev/null 2>&1; then
+        DOCKER=("${SUDO}" docker)
+    else
+        print_error "宿主机未安装 node，且 Docker daemon 当前不可访问。"
+        exit 1
+    fi
+}
+
+app_container_exec() {
+    "${DOCKER[@]}" exec -i "${APP_CONTAINER_NAME}" "$@"
+}
+
+node_eval() {
+    local script="$1"
+    shift
+    if [ "${NODE_RUNTIME_MODE}" = "host" ]; then
+        node -e "${script}" "$@"
+        return 0
+    fi
+    app_container_exec node -e "${script}" "$@"
+}
+
+node_eval_with_stdin_file() {
+    local script="$1"
+    local input_file="$2"
+    shift 2
+    if [ "${NODE_RUNTIME_MODE}" = "host" ]; then
+        node -e "${script}" "$@" < "${input_file}"
+        return 0
+    fi
+    app_container_exec node -e "${script}" "$@" < "${input_file}"
+}
+
+ensure_node_runtime() {
+    if [ "${NODE_RUNTIME_RESOLVED}" = "1" ]; then
+        return 0
+    fi
+
+    if command -v node >/dev/null 2>&1; then
+        NODE_RUNTIME_MODE="host"
+        NODE_RUNTIME_LABEL="host node"
+        NODE_RUNTIME_RESOLVED=1
+        return 0
+    fi
+
+    refresh_stack_layout
+    ensure_docker
+    resolve_deploy_dir || true
+    refresh_stack_layout
+
+    if ! "${DOCKER[@]}" inspect "${APP_CONTAINER_NAME}" >/dev/null 2>&1; then
+        print_error "宿主机未安装 node，且未找到可用的应用容器 ${APP_CONTAINER_NAME}。请传入 --deploy-dir 或 APP_CONTAINER_NAME。"
+        exit 1
+    fi
+
+    if ! app_container_exec node -v >/dev/null 2>&1; then
+        print_error "宿主机未安装 node，且应用容器 ${APP_CONTAINER_NAME} 内不可用 node。"
+        exit 1
+    fi
+
+    NODE_RUNTIME_MODE="container"
+    NODE_RUNTIME_LABEL="container node (${APP_CONTAINER_NAME})"
+    NODE_RUNTIME_RESOLVED=1
+    print_info "宿主机未安装 node，已自动切换为使用 ${APP_CONTAINER_NAME} 容器内置 node 执行 JSON 解析。"
+}
+
 api_request() {
     local method="$1"
     local api_path="$2"
@@ -241,7 +463,7 @@ api_request() {
 
     if [ -n "${ADMIN_TOKEN}" ]; then
         curl_cmd+=(-H "X-Admin-Token: ${ADMIN_TOKEN}")
-    elif [ -f "${COOKIE_JAR}" ]; then
+    elif [ -n "${COOKIE_JAR}" ]; then
         curl_cmd+=(-b "${COOKIE_JAR}" -c "${COOKIE_JAR}")
     fi
 
@@ -435,6 +657,7 @@ write_summary() {
         echo "- 检查时间：$(date '+%Y-%m-%d %H:%M:%S')"
         echo "- 基础地址：${BASE_URL}"
         echo "- 认证方式：$([ -n "${ADMIN_TOKEN}" ] && echo 'X-Admin-Token' || echo 'login cookie')"
+        echo "- JSON 解析运行时：${NODE_RUNTIME_LABEL:-未解析}"
         echo "- 目标版本：${TARGET_VERSION:-未解析}"
         echo "- 目标范围：${TARGET_SCOPE}"
         echo "- 目标策略：${TARGET_STRATEGY}"
@@ -488,6 +711,9 @@ write_summary() {
 
 main() {
     parse_args "$@"
+    refresh_stack_layout
+    resolve_deploy_dir || true
+    refresh_base_url_default
     ensure_deps
     init_runtime_paths
 

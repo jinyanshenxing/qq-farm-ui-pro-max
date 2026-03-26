@@ -1,3 +1,9 @@
+2026-03-25 远程更新 smoke 无 Node 兜底与默认地址修复 前端：v4.5.38 后端：v4.5.38
+  - 🧪 [smoke] `smoke-system-update-center.sh` 现在支持在宿主机无 `node` 时自动借用主程序容器内置 `node` 执行 JSON 解析，生产机不必额外安装 Node.js。
+  - 🔐 [鉴权] 修复首个登录请求不会写入 cookie jar 的问题，`/api/login` 成功后后续 admin 接口不再假性 `401`。
+  - 🌐 [地址] `smoke` 默认会在传入 `--deploy-dir` 时从 `.env` 读取 `WEB_PORT` 推导 `base-url`，设置页、帮助中心和部署脚本提示也已去掉旧的 `9527` 硬编码。
+  - 🔖 [版本] `core / web` 包版本、README、部署模板和默认镜像标签已统一抬升到 `v4.5.38`。
+
 2026-03-25 更新入口容器直连热修复 前端：v4.5.37 后端：v4.5.37
   - 🩹 [更新] `update-app.sh` 改为优先通过显式容器名执行重登录风险检查、更新桥接和管理员密码同步，不再依赖 `docker compose exec` 的 project 名推断。
   - 🔄 [代理] `update-agent.sh` 与 `verify-stack.sh` 也同步切到容器直连，旧服务器上的远程更新代理和核验链路更稳。

@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.38',
+    date: '2026-03-25',
+    title: '远程更新 smoke 无 Node 兜底与默认地址修复',
+    summary: 'smoke 脚本支持自动借用主程序容器内置 `node`、首登 cookie 正常落盘，并改为从部署目录 `.env` 的 `WEB_PORT` 推导默认 `base-url`。',
+  },
+  {
     version: 'v4.5.37',
     date: '2026-03-25',
     title: '更新入口容器直连热修复',

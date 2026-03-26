@@ -289,7 +289,6 @@ const SYSTEM_UPDATE_INSTALL_AGENT_COMMAND = [
 const SYSTEM_UPDATE_SMOKE_COMMAND = [
   'cd /opt/qq-farm-current',
   'bash smoke-system-update-center.sh \\',
-  '  --base-url http://127.0.0.1:9527 \\',
   '  --username admin \\',
   "  --password '你的管理员密码' \\",
   '  --deploy-dir /opt/qq-farm-current',

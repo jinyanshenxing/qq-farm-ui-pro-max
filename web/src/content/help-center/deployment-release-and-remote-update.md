@@ -83,7 +83,6 @@ systemctl status qq-farm-update-agent
 ```bash
 cd /opt/qq-farm-current
 bash smoke-system-update-center.sh \
-  --base-url http://127.0.0.1:9527 \
   --username admin \
   --password '你的管理员密码' \
   --deploy-dir /opt/qq-farm-current
@@ -97,6 +96,8 @@ bash smoke-system-update-center.sh \
 - 独立 preflight 正常
 - 最近任务详情和回滚候选能读取
 - `verify-stack.sh` 能正常跑
+
+如果宿主机没有安装 `node`，新版本的 smoke 脚本会自动回退到应用容器里的 `node`，所以生产机不需要为了这条检查额外安装一套 Node.js；但 Docker 和主程序容器需要已经处于可用状态。
 
 ## 后台远程更新怎么操作
 

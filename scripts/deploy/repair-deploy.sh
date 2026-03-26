@@ -397,7 +397,7 @@ main() {
     echo "安全升级命令: ${DEPLOY_DIR}/safe-update.sh"
     echo "手动修复向导: ${DEPLOY_DIR}/manual-config-wizard.sh"
     echo "安装后核验脚本: ${DEPLOY_DIR}/verify-stack.sh"
-    echo "更新中心 smoke: ${DEPLOY_DIR}/smoke-system-update-center.sh --base-url http://127.0.0.1:9527 --username admin --password '你的管理员密码' --deploy-dir ${DEPLOY_DIR}"
+    echo "更新中心 smoke: ${DEPLOY_DIR}/smoke-system-update-center.sh --username admin --password '你的管理员密码' --deploy-dir ${DEPLOY_DIR}"
     echo "后台更新代理: ${DEPLOY_DIR}/update-agent.sh --once"
     echo "安装代理常驻服务: ${DEPLOY_DIR}/install-update-agent-service.sh"
     echo "数据库修复命令: ${DEPLOY_DIR}/repair-mysql.sh --backup"
