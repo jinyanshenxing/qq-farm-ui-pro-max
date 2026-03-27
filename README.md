@@ -2,7 +2,7 @@
 
 > 🔴 **醒目提醒：现在扫码登录失效，等其他大佬修复，本仓库暂停更新功能，仅修复bug了。**基于 Node.js 的 QQ 农场自动化工具，支持多账号管理、Web 控制面板、实时日志与数据分析。
 
-![版本](https://img.shields.io/badge/版本-v4.5.44-blue)
+![版本](https://img.shields.io/badge/版本-v4.5.45-blue)
 ![Node.js](https://img.shields.io/badge/Node.js-20+-green)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-orange)
 ![Redis](https://img.shields.io/badge/Redis-6.0-red)
@@ -274,8 +274,10 @@ pnpm check:doc-links
 
 ### 一键脚本
 
+为降低 GitHub Raw 边缘节点偶发卡住的概率，推荐直接使用下面这条带 `HTTP/1.1 + retry + timeout` 的稳态命令：
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 脚本会自动完成这些事情：
@@ -296,20 +298,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/m
 
 ```bash
 WEB_PORT=3080 ADMIN_PASSWORD='你的强密码' NON_INTERACTIVE=1 \
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 弱网或离线首装示例：
 
 ```bash
 IMAGE_ARCHIVE=/root/qq-farm-bot-images-amd64.tar.gz \
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 如需固定镜像版本或覆盖仓库，可在 `.env` 中设置：
 
 ```bash
-APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.44
+APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.45
 MYSQL_IMAGE=mysql:8.0
 REDIS_IMAGE=redis:7-alpine
 IPAD860_IMAGE=smdk000/ipad860:latest
@@ -364,7 +366,7 @@ bash install-or-update.sh --action update --preserve-current
 bash update-app.sh
 
 # 如需切到指定版本
-bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.44
+bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.45
 
 # 弱网 / 离线环境：先 docker load，再用离线镜像包更新
 bash update-app.sh --image-archive /root/qq-farm-bot-images-amd64.tar.gz
@@ -419,8 +421,8 @@ curl http://localhost:3080/api/ping
 
 - `qq-farm-bot-images-amd64.tar.gz`
 - `qq-farm-bot-images-arm64.tar.gz`
-- `qq-farm-bot-v4.5.44-offline-amd64.tar.gz`
-- `qq-farm-bot-v4.5.44-offline-arm64.tar.gz`
+- `qq-farm-bot-v4.5.45-offline-amd64.tar.gz`
+- `qq-farm-bot-v4.5.45-offline-arm64.tar.gz`
 
 其中 `arm64` 离线包里的 `ipad860` 仍是 `linux/amd64`，目标宿主机需支持 QEMU。
 
@@ -454,7 +456,7 @@ echo $GH_PAT | docker login ghcr.io -u smdk000 --password-stdin
 **使用脚本构建（推荐）**:
 ```bash
 chmod +x scripts/docker/docker-build-multiarch.sh
-./scripts/docker/docker-build-multiarch.sh --version 4.5.44
+./scripts/docker/docker-build-multiarch.sh --version 4.5.45
 ```
 
 **手动构建**:
@@ -462,7 +464,7 @@ chmod +x scripts/docker/docker-build-multiarch.sh
 # 构建并推送到 Docker Hub
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t smdk000/qq-farm-bot-ui:4.5.44 \
+  -t smdk000/qq-farm-bot-ui:4.5.45 \
   -t smdk000/qq-farm-bot-ui:latest \
   -f core/Dockerfile . \
   --push
@@ -470,7 +472,7 @@ docker buildx build \
 # 构建并推送到 GitHub Container Registry
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/smdk000/qq-farm-ui-pro-max:4.5.44 \
+  -t ghcr.io/smdk000/qq-farm-ui-pro-max:4.5.45 \
   -t ghcr.io/smdk000/qq-farm-ui-pro-max:latest \
   -f core/Dockerfile . \
   --push
@@ -480,7 +482,7 @@ docker buildx build \
 
 ```bash
 chmod +x scripts/release/build-release-assets.sh
-./scripts/release/build-release-assets.sh --version v4.5.44
+./scripts/release/build-release-assets.sh --version v4.5.45
 
 # 产物默认输出到 ./release-assets
 ls release-assets
@@ -490,7 +492,7 @@ ls release-assets
 
 ```bash
 # 查看镜像信息
-docker buildx imagetools inspect smdk000/qq-farm-bot-ui:4.5.44
+docker buildx imagetools inspect smdk000/qq-farm-bot-ui:4.5.45
 
 # Docker Hub 查看
 # https://hub.docker.com/r/smdk000/qq-farm-bot-ui/tags
@@ -596,7 +598,7 @@ lsof -i :3080
 
 # 使用不同端口
 export WEB_PORT=3081
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 ---
@@ -611,7 +613,7 @@ permission denied while trying to connect to the Docker daemon socket
 **解决方案**:
 ```bash
 # 使用 sudo
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+sudo bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 
 # 或将用户添加到 docker 组
 sudo usermod -aG docker $USER
@@ -724,7 +726,7 @@ Docker 会自动选择适合您系统架构的镜像版本。
 
 **维护者**: smdk000
 **最后更新**: 2026-03-27
-**版本**: v4.5.44
+**版本**: v4.5.45
 
 ## 多用户模式
 
@@ -1097,6 +1099,11 @@ ISC License
 ---
 
 ## 🎉 最近更新
+
+### v4.5.45 - 一键安装 GitHub Raw 下载稳态热修复 (2026-03-28)
+- ✅ `install-or-update.sh` 的 bootstrap 下载现在会固定走 `HTTP/1.1`，继续叠加超时、重试与原子落盘，降低真实服务器在 GitHub Raw 某些边缘连接上长时间挂起的概率。
+- ✅ README、部署文档和 Docker 构建摘要里的一键安装命令已经统一换成 `curl --http1.1 --retry ... --max-time ... -fsSL`，外层脚本下载与内层 bootstrap 拉取口径完全一致。
+- ✅ `scripts/deploy/install-or-update.sh`、默认镜像标签、README、部署模板、帮助中心 Release Notes 与系统更新相关测试夹具已统一抬升到 `v4.5.45`。
 
 ### v4.5.44 - 一键安装 bootstrap 下载可靠性热修复 (2026-03-27)
 - ✅ `install-or-update.sh` 新增统一的 bootstrap 下载兜底：`stack-layout.sh` 和其它 sibling 脚本都会带超时、重试与原子落盘，不再因为异常 GitHub Raw 连接留下半截下载或长时间卡住。

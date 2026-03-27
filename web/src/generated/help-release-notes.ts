@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.45',
+    date: '2026-03-28',
+    title: '一键安装 GitHub Raw 下载稳态热修复',
+    summary: 'bootstrap 下载固定走 `HTTP/1.1`，文档里的一键安装命令统一补上重试与超时参数，降低真实服务器命中异常 Raw 连接时反复挂起的概率。',
+  },
+  {
     version: 'v4.5.44',
     date: '2026-03-27',
     title: '一键安装 bootstrap 下载可靠性热修复',

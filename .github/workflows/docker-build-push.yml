@@ -163,7 +163,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo '# 全新服务器统一入口' >> $GITHUB_STEP_SUMMARY
-          echo 'bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install' >> $GITHUB_STEP_SUMMARY
+          echo 'bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install' >> $GITHUB_STEP_SUMMARY
           echo '' >> $GITHUB_STEP_SUMMARY
           echo '# 已部署服务器统一更新入口' >> $GITHUB_STEP_SUMMARY
           echo '/opt/qq-farm-current/install-or-update.sh --action update --preserve-current' >> $GITHUB_STEP_SUMMARY

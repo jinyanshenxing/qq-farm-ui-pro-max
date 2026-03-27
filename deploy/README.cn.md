@@ -26,7 +26,7 @@
 
 ```bash
 cd deploy/scripts
-bash build-all-and-push.sh 4.5.44
+bash build-all-and-push.sh 4.5.45
 ```
 
 脚本中选择：
@@ -40,14 +40,14 @@ bash build-all-and-push.sh 4.5.44
 deploy/offline/qq-farm-bot-deploy.tar.gz
 deploy/offline/qq-farm-bot-images-amd64.tar.gz
 deploy/offline/qq-farm-bot-images-arm64.tar.gz
-deploy/offline/qq-farm-bot-v4.5.44-offline-amd64.tar.gz
-deploy/offline/qq-farm-bot-v4.5.44-offline-arm64.tar.gz
+deploy/offline/qq-farm-bot-v4.5.45-offline-amd64.tar.gz
+deploy/offline/qq-farm-bot-v4.5.45-offline-arm64.tar.gz
 ```
 
 上传到服务器后执行：
 
 ```bash
-tar xzf qq-farm-bot-v4.5.44-offline-amd64.tar.gz
+tar xzf qq-farm-bot-v4.5.45-offline-amd64.tar.gz
 cd qq-farm-bot-release-amd64
 cp .env.example .env
 vi .env
@@ -69,7 +69,7 @@ curl http://127.0.0.1:3080/api/ping
 
 ```bash
 cd deploy/scripts
-bash build-all-and-push.sh 4.5.44
+bash build-all-and-push.sh 4.5.45
 ```
 
 需要的文件：
@@ -161,13 +161,13 @@ chmod +x repair-deploy.sh
 在线一键命令：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 ## 说明
 
 - 本文档不改变默认部署脚本行为，只提供更适合国内网络的交付方式。
 - 国内网络最稳定的方案仍然是“离线包”或“预载镜像后再启动”。
-- `amd64` 服务器用 `qq-farm-bot-images-amd64.tar.gz` / `qq-farm-bot-v4.5.44-offline-amd64.tar.gz`。
-- `arm64` 服务器用 `qq-farm-bot-images-arm64.tar.gz` / `qq-farm-bot-v4.5.44-offline-arm64.tar.gz`。
+- `amd64` 服务器用 `qq-farm-bot-images-amd64.tar.gz` / `qq-farm-bot-v4.5.45-offline-amd64.tar.gz`。
+- `arm64` 服务器用 `qq-farm-bot-images-arm64.tar.gz` / `qq-farm-bot-v4.5.45-offline-arm64.tar.gz`。
 - `arm64` 离线包里的 `ipad860` 仍是 `linux/amd64`，目标宿主机需支持 QEMU。

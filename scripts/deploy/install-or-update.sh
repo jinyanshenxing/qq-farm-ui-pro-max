@@ -66,6 +66,7 @@ download_bootstrap_file() {
     mkdir -p "$(dirname "${target_path}")"
     rm -f "${temp_path}"
     if ! curl --fail --silent --show-error --location \
+        --http1.1 \
         --connect-timeout "${BOOTSTRAP_CURL_CONNECT_TIMEOUT}" \
         --max-time "${BOOTSTRAP_CURL_MAX_TIME}" \
         --retry "${BOOTSTRAP_CURL_RETRY}" \

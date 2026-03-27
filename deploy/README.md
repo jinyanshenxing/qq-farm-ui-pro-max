@@ -52,20 +52,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/m
 
 ```bash
 WEB_PORT=3080 ADMIN_PASSWORD='你的强密码' NON_INTERACTIVE=1 \
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 离线首装示例：
 
 ```bash
 IMAGE_ARCHIVE=/root/qq-farm-bot-images-amd64.tar.gz \
-bash <(curl -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
+bash <(curl --http1.1 --retry 4 --retry-delay 1 --retry-all-errors --connect-timeout 10 --max-time 90 -fsSL https://raw.githubusercontent.com/smdk000/qq-farm-ui-pro-max/main/scripts/deploy/install-or-update.sh) --action install
 ```
 
 可选镜像配置（写入 `.env`）：
 
 ```bash
-APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.44
+APP_IMAGE=smdk000/qq-farm-bot-ui:4.5.45
 MYSQL_IMAGE=mysql:8.0
 REDIS_IMAGE=redis:7-alpine
 IPAD860_IMAGE=smdk000/ipad860:latest
@@ -124,7 +124,7 @@ bash update-app.sh
 bash safe-update.sh
 
 # 如需切到指定版本
-bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.44
+bash update-app.sh --image smdk000/qq-farm-bot-ui:4.5.45
 
 # 弱网 / 离线环境：先 docker load，再用离线镜像包更新
 bash update-app.sh --image-archive /root/qq-farm-bot-images-amd64.tar.gz
@@ -183,8 +183,8 @@ curl http://localhost:3080/api/ping
 
 - `qq-farm-bot-images-amd64.tar.gz`
 - `qq-farm-bot-images-arm64.tar.gz`
-- `qq-farm-bot-v4.5.44-offline-amd64.tar.gz`
-- `qq-farm-bot-v4.5.44-offline-arm64.tar.gz`
+- `qq-farm-bot-v4.5.45-offline-amd64.tar.gz`
+- `qq-farm-bot-v4.5.45-offline-arm64.tar.gz`
 
 其中 `arm64` 离线包里的 `ipad860` 仍是 `linux/amd64`，目标宿主机需支持 QEMU。
 
