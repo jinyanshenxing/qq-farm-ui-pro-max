@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.44',
+    date: '2026-03-27',
+    title: '一键安装 bootstrap 下载可靠性热修复',
+    summary: '`install-or-update.sh` 为 bootstrap 脚本下载增加超时、重试与原子落盘，修复真实服务器命中异常 GitHub Raw 连接时可能长时间挂住的问题。',
+  },
+  {
     version: 'v4.5.43',
     date: '2026-03-27',
     title: '一键安装单文件 bootstrap 修复',

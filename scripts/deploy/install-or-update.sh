@@ -24,6 +24,9 @@ APP_IMAGE_OVERRIDE="${APP_IMAGE_OVERRIDE:-}"
 ALLOW_RELOGIN_RISK="${ALLOW_RELOGIN_RISK:-0}"
 SKIP_VERIFY="${SKIP_VERIFY:-0}"
 WEB_PORT_OVERRIDE="${WEB_PORT_OVERRIDE:-}"
+BOOTSTRAP_CURL_CONNECT_TIMEOUT="${BOOTSTRAP_CURL_CONNECT_TIMEOUT:-10}"
+BOOTSTRAP_CURL_MAX_TIME="${BOOTSTRAP_CURL_MAX_TIME:-90}"
+BOOTSTRAP_CURL_RETRY="${BOOTSTRAP_CURL_RETRY:-4}"
 DOCKER=(docker)
 SUDO=""
 DEPLOY_DIR_EXPLICIT=0
@@ -55,6 +58,26 @@ print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+download_bootstrap_file() {
+    local source_url="$1"
+    local target_path="$2"
+    local temp_path="${target_path}.tmp.$$"
+
+    mkdir -p "$(dirname "${target_path}")"
+    rm -f "${temp_path}"
+    if ! curl --fail --silent --show-error --location \
+        --connect-timeout "${BOOTSTRAP_CURL_CONNECT_TIMEOUT}" \
+        --max-time "${BOOTSTRAP_CURL_MAX_TIME}" \
+        --retry "${BOOTSTRAP_CURL_RETRY}" \
+        --retry-delay 1 \
+        --retry-all-errors \
+        "${source_url}" -o "${temp_path}"; then
+        rm -f "${temp_path}"
+        return 1
+    fi
+    mv "${temp_path}" "${target_path}"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_BUNDLE_DIR="${SCRIPT_DIR}"
 STACK_LAYOUT_PATH="${SCRIPT_DIR}/stack-layout.sh"
@@ -68,7 +91,10 @@ if [ ! -f "${STACK_LAYOUT_PATH}" ]; then
             echo "[ERROR] 缺少 stack-layout.sh 且系统未安装 curl，无法继续执行。" >&2
             exit 1
         }
-        curl -fsSL "${RAW_BASE_URL}/scripts/deploy/stack-layout.sh" -o "${STACK_LAYOUT_PATH}"
+        if ! download_bootstrap_file "${RAW_BASE_URL}/scripts/deploy/stack-layout.sh" "${STACK_LAYOUT_PATH}"; then
+            echo "[ERROR] 无法下载 stack-layout.sh，请稍后重试或检查 GitHub Raw 网络连通性。" >&2
+            exit 1
+        fi
     fi
 fi
 # shellcheck source=stack-layout.sh
@@ -91,7 +117,10 @@ ensure_bootstrap_script() {
             print_error "缺少 ${name} 且系统未安装 curl，无法继续执行。"
             exit 1
         }
-        curl -fsSL "${RAW_BASE_URL}/scripts/deploy/${name}" -o "${target_path}"
+        if ! download_bootstrap_file "${RAW_BASE_URL}/scripts/deploy/${name}" "${target_path}"; then
+            print_error "下载 ${name} 失败，请稍后重试或检查 GitHub Raw 网络连通性。"
+            exit 1
+        fi
         chmod +x "${target_path}"
     fi
 

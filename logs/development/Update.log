@@ -1,3 +1,8 @@
+2026-03-27 一键安装 bootstrap 下载可靠性热修复 前端：v4.5.44 后端：v4.5.44
+  - 🛟 [安装] `install-or-update.sh` 的 bootstrap 下载新增超时、重试与原子落盘，命中异常 GitHub Raw 连接时不再无限挂起。
+  - 🔁 [热修] 这次修复是在 `v4.5.43` 单文件 bootstrap 补齐基础上继续收口，首次安装和更新场景都会复用同一套更稳的拉取逻辑。
+  - 📦 [发布] `core / web` 包版本、README、部署模板和帮助中心 Release Notes 已统一抬升到 `v4.5.44`。
+
 2026-03-27 一键安装单文件 bootstrap 修复 前端：v4.5.43 后端：v4.5.43
   - 🚀 [安装] 单文件执行的 `install-or-update.sh` 现在会自动补齐安装、更新、核验和手动修复脚本。
   - 🩹 [修复] 直接执行 `bash <(curl -fsSL .../install-or-update.sh)` 时，不会再误访问 `/dev/fd/*.sh`。
