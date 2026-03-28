@@ -41,6 +41,10 @@ const importHexTextareaRef = ref<HTMLTextAreaElement | null>(null)
 const hideDefaultNamedFriends = ref(true)
 const hideLowLevelFriends = ref(true)
 const minVisibleFriendLevel = ref(2)
+const HIGH_QUALITY_FRIEND_LEVEL = 5
+const inspectionView = ref<'visible' | 'default_named' | 'low_level' | 'all'>('visible')
+const inspectionActionNotice = ref<{ text: string, at: number } | null>(null)
+const highlightedSummaryKey = ref<'default_named' | 'low_level' | 'visible' | 'all' | ''>('')
 
 function confirmAction(msg: string, action: () => Promise<void>) {
   confirmMessage.value = msg
@@ -122,6 +126,109 @@ function persistFriendFilterPrefs() {
     minVisibleFriendLevel: Math.max(1, Number(minVisibleFriendLevel.value || 2)),
   }))
 }
+
+function showInspectionActionNotice(text: string) {
+  inspectionActionNotice.value = {
+    text,
+    at: Date.now(),
+  }
+  window.setTimeout(() => {
+    if (inspectionActionNotice.value?.text === text)
+      inspectionActionNotice.value = null
+  }, 4000)
+}
+
+function pulseSummaryChip(key: 'default_named' | 'low_level' | 'visible' | 'all') {
+  highlightedSummaryKey.value = key
+  window.setTimeout(() => {
+    if (highlightedSummaryKey.value === key)
+      highlightedSummaryKey.value = ''
+  }, 1800)
+}
+
+function applyHighQualityFriendPreset() {
+  hideDefaultNamedFriends.value = true
+  hideLowLevelFriends.value = true
+  minVisibleFriendLevel.value = HIGH_QUALITY_FRIEND_LEVEL
+  inspectionView.value = 'visible'
+}
+
+function applyDefaultFriendPreset() {
+  hideDefaultNamedFriends.value = true
+  hideLowLevelFriends.value = true
+  minVisibleFriendLevel.value = 2
+  inspectionView.value = 'visible'
+}
+
+function showAllFriendsQuickly() {
+  hideDefaultNamedFriends.value = false
+  hideLowLevelFriends.value = false
+  minVisibleFriendLevel.value = 1
+  inspectionView.value = 'all'
+}
+
+function inspectVisibleFriends() {
+  inspectionView.value = 'visible'
+}
+
+function inspectDefaultNamedFriends() {
+  inspectionView.value = 'default_named'
+}
+
+function inspectLowLevelFriends() {
+  inspectionView.value = 'low_level'
+}
+
+const inspectionViewMeta = computed(() => {
+  if (inspectionView.value === 'default_named') {
+    return {
+      label: '正在检查默认名账号',
+      desc: '当前列表只显示名称/备注命中默认占位名规则的好友。',
+    }
+  }
+  if (inspectionView.value === 'low_level') {
+    return {
+      label: '正在检查低等级账号',
+      desc: '当前列表只显示低于最低显示等级阈值的好友。',
+    }
+  }
+  if (inspectionView.value === 'all') {
+    return {
+      label: '正在检查全部好友',
+      desc: '当前列表临时展示全部好友，适合做全量核对。',
+    }
+  }
+  return {
+    label: '正在查看当前可见好友',
+    desc: '当前列表按你启用的过滤条件展示可见好友。',
+  }
+})
+
+const isInspectionVisible = computed(() => inspectionView.value === 'visible')
+const isInspectionDefaultNamed = computed(() => inspectionView.value === 'default_named')
+const isInspectionLowLevel = computed(() => inspectionView.value === 'low_level')
+const isInspectionAll = computed(() => inspectionView.value === 'all')
+const canBulkBlacklistInspection = computed(() =>
+  canMutateFriends.value && (isInspectionDefaultNamed.value || isInspectionLowLevel.value) && filteredFriends.value.length > 0,
+)
+const inspectionBlacklistedCount = computed(() =>
+  filteredFriends.value.filter((friend: any) => blacklist.value.includes(Number(friend.gid))).length,
+)
+const inspectionUnblacklistedCount = computed(() =>
+  filteredFriends.value.filter((friend: any) => !blacklist.value.includes(Number(friend.gid))).length,
+)
+const canBulkUnblacklistInspection = computed(() =>
+  canMutateFriends.value && (isInspectionDefaultNamed.value || isInspectionLowLevel.value) && inspectionBlacklistedCount.value > 0,
+)
+const inspectionBatchLabel = computed(() => {
+  if (isInspectionDefaultNamed.value)
+    return '默认名账号'
+  if (isInspectionLowLevel.value)
+    return '低等级账号'
+  if (isInspectionAll.value)
+    return '当前检查结果'
+  return '当前检查结果'
+})
 
 async function loadFriends(options: { manualRefresh?: boolean } = {}) {
   if (currentAccountId.value) {
@@ -243,18 +350,36 @@ function getFriendLevel(friend: any) {
   return Math.max(0, Number(friend?.farmLevel || friend?.level || 0))
 }
 
-const filteredFriends = computed(() => {
+function matchesSearch(friend: any) {
   const q = searchQuery.value.toLowerCase()
+  if (!q)
+    return true
+  const nameStr = String(friend?.name || friend?.nick || friend?.userName || friend?.id || '').toLowerCase()
+  const remarkStr = String(friend?.remark || '').toLowerCase()
+  return nameStr.includes(q) || remarkStr.includes(q)
+}
+
+function isLowLevelFriend(friend: any) {
+  return getFriendLevel(friend) < Math.max(1, Number(minVisibleFriendLevel.value || 1))
+}
+
+const filteredFriends = computed(() => {
   return friends.value.filter((f: any) => {
-    if (hideDefaultNamedFriends.value && isDefaultNamedFriend(f))
+    const defaultNamed = isDefaultNamedFriend(f)
+    const lowLevel = isLowLevelFriend(f)
+
+    if (inspectionView.value === 'default_named')
+      return defaultNamed && matchesSearch(f)
+    if (inspectionView.value === 'low_level')
+      return lowLevel && matchesSearch(f)
+    if (inspectionView.value === 'all')
+      return matchesSearch(f)
+
+    if (hideDefaultNamedFriends.value && defaultNamed)
       return false
-    if (hideLowLevelFriends.value && getFriendLevel(f) < Math.max(1, Number(minVisibleFriendLevel.value || 1)))
+    if (hideLowLevelFriends.value && lowLevel)
       return false
-    if (!q)
-      return true
-    const nameStr = String(f.name || f.nick || f.userName || f.id || '').toLowerCase()
-    const remarkStr = String(f.remark || '').toLowerCase()
-    return nameStr.includes(q) || remarkStr.includes(q)
+    return matchesSearch(f)
   })
 })
 
@@ -268,6 +393,95 @@ const hiddenByLevelCount = computed(() =>
     && (!hideDefaultNamedFriends.value || !isDefaultNamedFriend(friend)),
   ).length,
 )
+
+const hiddenFriendSummary = computed(() => {
+  const parts: string[] = []
+  if (hideDefaultNamedFriends.value && hiddenByDefaultNameCount.value > 0)
+    parts.push(`默认名已隐藏 ${hiddenByDefaultNameCount.value} 人`)
+  if (hideLowLevelFriends.value && hiddenByLevelCount.value > 0)
+    parts.push(`低等级已隐藏 ${hiddenByLevelCount.value} 人`)
+  return parts.join('，')
+})
+
+const isDefaultFilterPresetActive = computed(() =>
+  hideDefaultNamedFriends.value
+  && hideLowLevelFriends.value
+  && Math.max(1, Number(minVisibleFriendLevel.value || 1)) === 2,
+)
+
+const isHighQualityPresetActive = computed(() =>
+  hideDefaultNamedFriends.value
+  && hideLowLevelFriends.value
+  && Math.max(1, Number(minVisibleFriendLevel.value || 1)) === HIGH_QUALITY_FRIEND_LEVEL,
+)
+
+const isShowAllPresetActive = computed(() =>
+  !hideDefaultNamedFriends.value
+  && !hideLowLevelFriends.value
+  && Math.max(1, Number(minVisibleFriendLevel.value || 1)) === 1,
+)
+
+const activeFilterMode = computed(() => {
+  if (isHighQualityPresetActive.value) {
+    return {
+      label: '高质量好友',
+      toneClass: 'border-emerald-200 bg-emerald-50/80 text-emerald-800',
+      desc: `当前优先只看更有操作价值的好友，默认名和 Lv.${HIGH_QUALITY_FRIEND_LEVEL - 1} 以下账号都会隐藏。`,
+    }
+  }
+  if (isShowAllPresetActive.value) {
+    return {
+      label: '全部好友',
+      toneClass: 'border-slate-200 bg-slate-50/80 text-slate-700',
+      desc: '当前关闭了默认过滤，正在展示所有好友，适合做全量核对和排查。',
+    }
+  }
+  if (isDefaultFilterPresetActive.value) {
+    return {
+      label: '默认过滤',
+      toneClass: 'border-sky-200 bg-sky-50/80 text-sky-800',
+      desc: '当前使用推荐默认视图，自动隐藏默认名账号和 Lv.1 小号，兼顾可读性与完整性。',
+    }
+  }
+  return {
+    label: '自定义过滤',
+    toneClass: 'border-amber-200 bg-amber-50/80 text-amber-800',
+    desc: '你正在使用自定义筛选组合，当前列表会按你的手动条件即时过滤。',
+  }
+})
+
+const filterModeTabs = computed(() => ([
+  {
+    key: 'default',
+    title: '默认过滤',
+    subtitle: '隐藏默认名和 Lv.1',
+    active: isDefaultFilterPresetActive.value,
+    icon: 'i-carbon-filter-edit',
+    activeClass: 'border-sky-400 bg-sky-500/12 text-sky-900 ring-2 ring-sky-400/20',
+    badgeClass: 'bg-sky-500 text-white',
+    onClick: applyDefaultFriendPreset,
+  },
+  {
+    key: 'quality',
+    title: '高质量好友',
+    subtitle: `默认名隐藏，最低 Lv.${HIGH_QUALITY_FRIEND_LEVEL}`,
+    active: isHighQualityPresetActive.value,
+    icon: 'i-carbon-star-filled',
+    activeClass: 'border-emerald-400 bg-emerald-500/12 text-emerald-900 ring-2 ring-emerald-400/20',
+    badgeClass: 'bg-emerald-500 text-white',
+    onClick: applyHighQualityFriendPreset,
+  },
+  {
+    key: 'all',
+    title: '全部好友',
+    subtitle: '关闭默认过滤条件',
+    active: isShowAllPresetActive.value,
+    icon: 'i-carbon-user-multiple',
+    activeClass: 'border-slate-400 bg-slate-500/12 text-slate-900 ring-2 ring-slate-400/20',
+    badgeClass: 'bg-slate-600 text-white',
+    onClick: showAllFriendsQuickly,
+  },
+]))
 
 const hideDefaultNamedFriendsLabel = computed(() => `(${hiddenByDefaultNameCount.value})`)
 
@@ -680,6 +894,95 @@ function selectAllFiltered() {
   selectedFriendIds.value = filteredFriends.value.map((friend: any) => Number(friend.gid || 0)).filter((gid: number) => gid > 0)
 }
 
+function selectInspectionFriends() {
+  if (!canMutateFriends.value)
+    return
+  selectionMode.value = true
+  selectedFriendIds.value = filteredFriends.value.map((friend: any) => Number(friend.gid || 0)).filter((gid: number) => gid > 0)
+}
+
+function handleBulkBlacklistInspection() {
+  if (!canBulkBlacklistInspection.value)
+    return
+  const targetIds = filteredFriends.value.map((friend: any) => Number(friend.gid || 0)).filter((gid: number) => gid > 0)
+  if (targetIds.length === 0)
+    return
+  confirmAction(`确定将当前检查结果中的 ${targetIds.length} 位${inspectionBatchLabel.value}批量加入黑名单吗？加入后这些好友会在常规好友视图中被自动屏蔽。`, async () => {
+    batchRunning.value = true
+    try {
+      const result = await friendStore.batchOperate(currentAccountId.value!, targetIds, 'blacklist_add', {
+        continueOnError: true,
+        skipBlacklisted: false,
+        cooldownMs: 600,
+      })
+      batchResult.value = result
+      await friendStore.fetchBlacklist(currentAccountId.value!)
+      await loadFriends()
+      if (result?.successCount > 0) {
+        showInspectionActionNotice(`本次已将 ${result.successCount} 位${inspectionBatchLabel.value}加入黑名单`)
+        if (isInspectionDefaultNamed.value)
+          pulseSummaryChip('default_named')
+        else if (isInspectionLowLevel.value)
+          pulseSummaryChip('low_level')
+        else if (isInspectionAll.value)
+          pulseSummaryChip('all')
+        else
+          pulseSummaryChip('visible')
+        toast.success(`已将 ${result.successCount} 位${inspectionBatchLabel.value}加入黑名单`)
+      }
+      else {
+        showInspectionActionNotice('本次批量拉黑没有成功项')
+        toast.warning('本次批量拉黑没有成功项')
+      }
+    }
+    finally {
+      batchRunning.value = false
+    }
+  })
+}
+
+function handleBulkUnblacklistInspection() {
+  if (!canBulkUnblacklistInspection.value)
+    return
+  const targetIds = filteredFriends.value
+    .map((friend: any) => Number(friend.gid || 0))
+    .filter((gid: number) => gid > 0 && blacklist.value.includes(gid))
+  if (targetIds.length === 0)
+    return
+  confirmAction(`确定将当前检查结果中的 ${targetIds.length} 位${inspectionBatchLabel.value}移出黑名单吗？移出后这些好友会重新回到常规好友视图。`, async () => {
+    batchRunning.value = true
+    try {
+      const result = await friendStore.batchOperate(currentAccountId.value!, targetIds, 'blacklist_remove', {
+        continueOnError: true,
+        skipBlacklisted: false,
+        cooldownMs: 600,
+      })
+      batchResult.value = result
+      await friendStore.fetchBlacklist(currentAccountId.value!)
+      await loadFriends()
+      if (result?.successCount > 0) {
+        showInspectionActionNotice(`本次已将 ${result.successCount} 位${inspectionBatchLabel.value}移出黑名单`)
+        if (isInspectionDefaultNamed.value)
+          pulseSummaryChip('default_named')
+        else if (isInspectionLowLevel.value)
+          pulseSummaryChip('low_level')
+        else if (isInspectionAll.value)
+          pulseSummaryChip('all')
+        else
+          pulseSummaryChip('visible')
+        toast.success(`已将 ${result.successCount} 位${inspectionBatchLabel.value}移出黑名单`)
+      }
+      else {
+        showInspectionActionNotice('本次批量移黑没有成功项')
+        toast.warning('本次批量移黑没有成功项')
+      }
+    }
+    finally {
+      batchRunning.value = false
+    }
+  })
+}
+
 function clearSelectedFriends() {
   selectedFriendIds.value = []
 }
@@ -800,6 +1103,23 @@ function getFriendStatusClass(friend: any) {
     ? 'friends-status-text friends-status-text-active'
     : 'friends-status-text friends-status-text-idle'
 }
+
+function getInspectionReasonBadges(friend: any) {
+  const badges: Array<{ label: string, className: string }> = []
+  if (isDefaultNamedFriend(friend)) {
+    badges.push({
+      label: '默认名',
+      className: 'border-amber-200 bg-amber-50 text-amber-800',
+    })
+  }
+  if (isLowLevelFriend(friend)) {
+    badges.push({
+      label: `低等级 Lv.${getFriendLevel(friend)}`,
+      className: 'border-orange-200 bg-orange-50 text-orange-800',
+    })
+  }
+  return badges
+}
 </script>
 
 <template>
@@ -887,6 +1207,46 @@ function getFriendStatusClass(friend: any) {
     </div>
 
     <div class="glass-panel mb-4 rounded-xl p-4 shadow">
+      <div class="mb-4">
+        <div class="text-sm font-semibold">
+          视图模式
+        </div>
+        <div class="friends-summary-note mt-1 text-xs leading-5">
+          先选择一个常用视图模式，再按需微调下面的过滤条件。
+        </div>
+        <div class="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-3">
+          <button
+            v-for="tab in filterModeTabs"
+            :key="tab.key"
+            class="rounded-xl border px-4 py-3 text-left transition"
+            :class="tab.active
+              ? tab.activeClass
+              : 'border-white/10 bg-white/40 hover:border-primary-300 hover:bg-white/70'"
+            @click="tab.onClick()"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-start gap-3">
+                <div
+                  class="mt-0.5 text-lg"
+                  :class="tab.icon"
+                />
+                <div class="text-sm font-semibold">
+                  <div>{{ tab.title }}</div>
+                  <div class="friends-summary-note mt-1 text-xs">
+                    {{ tab.subtitle }}
+                  </div>
+                </div>
+              </div>
+              <div
+                class="rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                :class="tab.active ? tab.badgeClass : 'bg-black/5 text-slate-500'"
+              >
+                {{ tab.active ? '当前' : '切换' }}
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
       <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div class="text-sm font-semibold">
@@ -917,6 +1277,139 @@ function getFriendStatusClass(friend: any) {
               class="friends-search-input glass-text-main h-[34px] w-20 rounded-lg px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
           </label>
+        </div>
+      </div>
+      <div class="mt-3 flex flex-col gap-3 rounded-xl border border-[#d8e7dd] bg-white/60 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="flex items-start gap-3">
+          <div class="i-carbon-filter text-lg text-[#4f6b57]" />
+          <div>
+            <div
+              v-if="inspectionActionNotice"
+              class="mb-3 inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800"
+            >
+              <span class="i-carbon-checkmark-filled text-base" />
+              <span>{{ inspectionActionNotice.text }}</span>
+            </div>
+            <div class="text-sm font-semibold text-[#35533d]">
+              当前过滤摘要
+            </div>
+            <div
+              class="mt-2 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold"
+              :class="activeFilterMode.toneClass"
+            >
+              {{ activeFilterMode.label }}
+            </div>
+            <div class="friends-summary-note mt-1 text-sm leading-6">
+              {{ activeFilterMode.desc }}
+            </div>
+            <div class="mt-2 inline-flex items-center rounded-full border border-[#d8e7dd] bg-white/80 px-2.5 py-1 text-xs font-medium text-[#4f6b57]">
+              {{ inspectionViewMeta.label }}
+            </div>
+            <div class="friends-summary-note mt-1 text-sm leading-6">
+              {{ inspectionViewMeta.desc }}
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                v-if="hideDefaultNamedFriends"
+                class="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 transition"
+                :class="[
+                  isInspectionDefaultNamed ? 'ring-2 ring-amber-300' : '',
+                  highlightedSummaryKey === 'default_named' ? 'scale-105 shadow-md shadow-amber-200/70' : '',
+                ]"
+                @click="inspectDefaultNamedFriends"
+              >
+                默认名隐藏 {{ hiddenByDefaultNameCount }}
+              </button>
+              <button
+                v-if="hideLowLevelFriends"
+                class="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-800 transition"
+                :class="[
+                  isInspectionLowLevel ? 'ring-2 ring-orange-300' : '',
+                  highlightedSummaryKey === 'low_level' ? 'scale-105 shadow-md shadow-orange-200/70' : '',
+                ]"
+                @click="inspectLowLevelFriends"
+              >
+                低等级隐藏 {{ hiddenByLevelCount }}
+              </button>
+              <button
+                class="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 transition"
+                :class="[
+                  isInspectionVisible ? 'ring-2 ring-emerald-300' : '',
+                  highlightedSummaryKey === 'visible' ? 'scale-105 shadow-md shadow-emerald-200/70' : '',
+                ]"
+                @click="inspectVisibleFriends"
+              >
+                当前展示 {{ filteredFriends.length }}
+              </button>
+              <button
+                class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 transition"
+                :class="[
+                  isInspectionAll ? 'ring-2 ring-slate-300' : '',
+                  highlightedSummaryKey === 'all' ? 'scale-105 shadow-md shadow-slate-200/70' : '',
+                ]"
+                @click="showAllFriendsQuickly"
+              >
+                全部好友 {{ friends.length }}
+              </button>
+            </div>
+            <div class="friends-summary-note mt-2 text-sm leading-6">
+              <template v-if="hiddenFriendSummary">
+                {{ hiddenFriendSummary }}。
+              </template>
+              <template v-else>
+                当前没有额外隐藏好友。
+              </template>
+            </div>
+            <div
+              v-if="isInspectionDefaultNamed || isInspectionLowLevel"
+              class="mt-2 flex flex-wrap items-center gap-2"
+            >
+              <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                当前检查结果 {{ filteredFriends.length }} 人
+              </span>
+              <span class="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+                未拉黑 {{ inspectionUnblacklistedCount }}
+              </span>
+              <span class="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-800">
+                已拉黑 {{ inspectionBlacklistedCount }}
+              </span>
+            </div>
+            <div v-if="canBulkBlacklistInspection" class="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                class="friends-refresh-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="selectInspectionFriends"
+              >
+                一键选中当前检查结果
+              </button>
+              <button
+                class="friends-refresh-btn friends-clear-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="handleBulkBlacklistInspection"
+              >
+                一键批量加入黑名单
+              </button>
+              <button
+                v-if="canBulkUnblacklistInspection"
+                class="friends-refresh-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="handleBulkUnblacklistInspection"
+              >
+                一键批量移出黑名单
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            class="friends-refresh-btn h-[36px] rounded-lg px-3 text-sm font-medium transition"
+            @click="applyDefaultFriendPreset"
+          >
+            恢复推荐默认
+          </button>
+          <button
+            class="friends-refresh-btn friends-clear-btn h-[36px] rounded-lg px-3 text-sm font-medium transition"
+            @click="showAllFriendsQuickly"
+          >
+            临时查看全部
+          </button>
         </div>
       </div>
     </div>
@@ -1123,6 +1616,19 @@ function getFriendStatusClass(friend: any) {
                   <BaseBadge v-if="blacklist.includes(Number(friend.gid))" surface="meta" tone="neutral" class="friends-blacklist-pill whitespace-nowrap rounded px-1.5 py-0.5 text-[10px]">
                     已屏蔽
                   </BaseBadge>
+                </div>
+                <div
+                  v-if="!isInspectionVisible && getInspectionReasonBadges(friend).length > 0"
+                  class="mt-1 flex flex-wrap items-center gap-1.5"
+                >
+                  <span
+                    v-for="badge in getInspectionReasonBadges(friend)"
+                    :key="`${friend.gid}-${badge.label}`"
+                    class="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                    :class="badge.className"
+                  >
+                    {{ badge.label }}
+                  </span>
                 </div>
                 <div class="mt-0.5 truncate text-sm" :class="getFriendStatusClass(friend)">
                   {{ getFriendStatusText(friend) }}
