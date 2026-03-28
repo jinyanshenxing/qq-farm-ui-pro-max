@@ -43,6 +43,7 @@ const hideLowLevelFriends = ref(true)
 const minVisibleFriendLevel = ref(2)
 const HIGH_QUALITY_FRIEND_LEVEL = 5
 const inspectionView = ref<'visible' | 'default_named' | 'low_level' | 'all'>('visible')
+const inspectionStatusFilter = ref<'all' | 'unblacklisted' | 'blacklisted'>('all')
 const inspectionActionNotice = ref<{ text: string, at: number } | null>(null)
 const highlightedSummaryKey = ref<'default_named' | 'low_level' | 'visible' | 'all' | ''>('')
 
@@ -146,11 +147,116 @@ function pulseSummaryChip(key: 'default_named' | 'low_level' | 'visible' | 'all'
   }, 1800)
 }
 
+function getInspectionRows() {
+  return filteredFriends.value
+    .map((friend: any) => ({
+      gid: Number(friend.gid || 0),
+      name: String(friend.name || '').trim(),
+      level: getFriendLevel(friend),
+      blacklisted: blacklist.value.includes(Number(friend.gid || 0)),
+    }))
+    .filter((row: any) => row.gid > 0)
+}
+
+function buildInspectionText(rows: Array<{ gid: number, name: string, level: number, blacklisted: boolean }>) {
+  return [
+    'gid\tname\tlevel\tblacklisted',
+    ...rows.map(row => `${row.gid}\t${row.name || '-'}\t${row.level}\t${row.blacklisted ? 'yes' : 'no'}`),
+  ].join('\n')
+}
+
+function buildInspectionCsv(rows: Array<{ gid: number, name: string, level: number, blacklisted: boolean }>) {
+  const escapeCsv = (value: string | number) => `"${String(value ?? '').replace(/"/g, '""')}"`
+  return [
+    'gid,name,level,blacklisted',
+    ...rows.map(row => [row.gid, row.name || '-', row.level, row.blacklisted ? 'yes' : 'no'].map(escapeCsv).join(',')),
+  ].join('\n')
+}
+
+function buildInspectionExportBaseName() {
+  const accountId = String(currentAccountId.value || 'unknown').trim() || 'unknown'
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `friend-records-${accountId}-${inspectionView.value}-${inspectionStatusFilter.value}-${stamp}`
+}
+
+async function copyInspectionGids() {
+  const rows = getInspectionRows()
+  if (rows.length === 0) {
+    toast.warning('当前检查结果里没有可复制的好友数据')
+    return
+  }
+  const text = buildInspectionText(rows)
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      showInspectionActionNotice(`已复制 ${rows.length} 条好友记录到剪贴板`)
+      toast.success(`已复制 ${rows.length} 条好友记录`)
+      return
+    }
+  }
+  catch {
+    // fall through to legacy copy
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  document.body.removeChild(textarea)
+  showInspectionActionNotice(`已复制 ${rows.length} 条好友记录到剪贴板`)
+  toast.success(`已复制 ${rows.length} 条好友记录`)
+}
+
+function downloadInspectionGids() {
+  const rows = getInspectionRows()
+  if (rows.length === 0) {
+    toast.warning('当前检查结果里没有可导出的好友数据')
+    return
+  }
+  const fileName = `${buildInspectionExportBaseName()}.txt`
+  const blob = new Blob([buildInspectionText(rows)], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+  showInspectionActionNotice(`已导出 ${rows.length} 条好友记录文本`)
+  toast.success(`已导出 ${rows.length} 条好友记录文本`)
+}
+
+function downloadInspectionCsv() {
+  const rows = getInspectionRows()
+  if (rows.length === 0) {
+    toast.warning('当前检查结果里没有可导出的好友数据')
+    return
+  }
+  const fileName = `${buildInspectionExportBaseName()}.csv`
+  const blob = new Blob([`\uFEFF${buildInspectionCsv(rows)}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+  showInspectionActionNotice(`已导出 ${rows.length} 条好友记录 CSV`)
+  toast.success(`已导出 ${rows.length} 条好友记录 CSV`)
+}
+
 function applyHighQualityFriendPreset() {
   hideDefaultNamedFriends.value = true
   hideLowLevelFriends.value = true
   minVisibleFriendLevel.value = HIGH_QUALITY_FRIEND_LEVEL
   inspectionView.value = 'visible'
+  inspectionStatusFilter.value = 'all'
 }
 
 function applyDefaultFriendPreset() {
@@ -158,6 +264,7 @@ function applyDefaultFriendPreset() {
   hideLowLevelFriends.value = true
   minVisibleFriendLevel.value = 2
   inspectionView.value = 'visible'
+  inspectionStatusFilter.value = 'all'
 }
 
 function showAllFriendsQuickly() {
@@ -165,18 +272,22 @@ function showAllFriendsQuickly() {
   hideLowLevelFriends.value = false
   minVisibleFriendLevel.value = 1
   inspectionView.value = 'all'
+  inspectionStatusFilter.value = 'all'
 }
 
 function inspectVisibleFriends() {
   inspectionView.value = 'visible'
+  inspectionStatusFilter.value = 'all'
 }
 
 function inspectDefaultNamedFriends() {
   inspectionView.value = 'default_named'
+  inspectionStatusFilter.value = 'all'
 }
 
 function inspectLowLevelFriends() {
   inspectionView.value = 'low_level'
+  inspectionStatusFilter.value = 'all'
 }
 
 const inspectionViewMeta = computed(() => {
@@ -217,8 +328,22 @@ const inspectionBlacklistedCount = computed(() =>
 const inspectionUnblacklistedCount = computed(() =>
   filteredFriends.value.filter((friend: any) => !blacklist.value.includes(Number(friend.gid))).length,
 )
+const inspectionTotalCount = computed(() =>
+  friends.value.filter((friend: any) => {
+    if (isInspectionDefaultNamed.value)
+      return isDefaultNamedFriend(friend) && matchesSearch(friend)
+    if (isInspectionLowLevel.value)
+      return isLowLevelFriend(friend) && matchesSearch(friend)
+    if (isInspectionAll.value)
+      return matchesSearch(friend)
+    return false
+  }).length,
+)
 const canBulkUnblacklistInspection = computed(() =>
   canMutateFriends.value && (isInspectionDefaultNamed.value || isInspectionLowLevel.value) && inspectionBlacklistedCount.value > 0,
+)
+const showInspectionStatusFilters = computed(() =>
+  isInspectionDefaultNamed.value || isInspectionLowLevel.value,
 )
 const inspectionBatchLabel = computed(() => {
   if (isInspectionDefaultNamed.value)
@@ -228,6 +353,13 @@ const inspectionBatchLabel = computed(() => {
   if (isInspectionAll.value)
     return '当前检查结果'
   return '当前检查结果'
+})
+const inspectionStatusSummaryLabel = computed(() => {
+  if (inspectionStatusFilter.value === 'blacklisted')
+    return '当前仅查看已拉黑对象'
+  if (inspectionStatusFilter.value === 'unblacklisted')
+    return '当前仅查看未拉黑对象'
+  return '当前查看该检查结果的全部对象'
 })
 
 async function loadFriends(options: { manualRefresh?: boolean } = {}) {
@@ -363,17 +495,26 @@ function isLowLevelFriend(friend: any) {
   return getFriendLevel(friend) < Math.max(1, Number(minVisibleFriendLevel.value || 1))
 }
 
+function matchesInspectionStatus(friend: any) {
+  const isBlacklisted = blacklist.value.includes(Number(friend?.gid))
+  if (inspectionStatusFilter.value === 'blacklisted')
+    return isBlacklisted
+  if (inspectionStatusFilter.value === 'unblacklisted')
+    return !isBlacklisted
+  return true
+}
+
 const filteredFriends = computed(() => {
   return friends.value.filter((f: any) => {
     const defaultNamed = isDefaultNamedFriend(f)
     const lowLevel = isLowLevelFriend(f)
 
     if (inspectionView.value === 'default_named')
-      return defaultNamed && matchesSearch(f)
+      return defaultNamed && matchesInspectionStatus(f) && matchesSearch(f)
     if (inspectionView.value === 'low_level')
-      return lowLevel && matchesSearch(f)
+      return lowLevel && matchesInspectionStatus(f) && matchesSearch(f)
     if (inspectionView.value === 'all')
-      return matchesSearch(f)
+      return matchesInspectionStatus(f) && matchesSearch(f)
 
     if (hideDefaultNamedFriends.value && defaultNamed)
       return false
@@ -425,27 +566,27 @@ const activeFilterMode = computed(() => {
   if (isHighQualityPresetActive.value) {
     return {
       label: '高质量好友',
-      toneClass: 'border-emerald-200 bg-emerald-50/80 text-emerald-800',
+      toneClass: 'friends-mode-pill friends-mode-pill-quality',
       desc: `当前优先只看更有操作价值的好友，默认名和 Lv.${HIGH_QUALITY_FRIEND_LEVEL - 1} 以下账号都会隐藏。`,
     }
   }
   if (isShowAllPresetActive.value) {
     return {
       label: '全部好友',
-      toneClass: 'border-slate-200 bg-slate-50/80 text-slate-700',
+      toneClass: 'friends-mode-pill friends-mode-pill-all',
       desc: '当前关闭了默认过滤，正在展示所有好友，适合做全量核对和排查。',
     }
   }
   if (isDefaultFilterPresetActive.value) {
     return {
       label: '默认过滤',
-      toneClass: 'border-sky-200 bg-sky-50/80 text-sky-800',
+      toneClass: 'friends-mode-pill friends-mode-pill-default',
       desc: '当前使用推荐默认视图，自动隐藏默认名账号和 Lv.1 小号，兼顾可读性与完整性。',
     }
   }
   return {
     label: '自定义过滤',
-    toneClass: 'border-amber-200 bg-amber-50/80 text-amber-800',
+    toneClass: 'friends-mode-pill friends-mode-pill-custom',
     desc: '你正在使用自定义筛选组合，当前列表会按你的手动条件即时过滤。',
   }
 })
@@ -457,8 +598,8 @@ const filterModeTabs = computed(() => ([
     subtitle: '隐藏默认名和 Lv.1',
     active: isDefaultFilterPresetActive.value,
     icon: 'i-carbon-filter-edit',
-    activeClass: 'border-sky-400 bg-sky-500/12 text-sky-900 ring-2 ring-sky-400/20',
-    badgeClass: 'bg-sky-500 text-white',
+    activeClass: 'friends-view-card friends-view-card-active friends-view-card-default',
+    badgeClass: 'friends-view-card-badge friends-view-card-badge-default',
     onClick: applyDefaultFriendPreset,
   },
   {
@@ -467,8 +608,8 @@ const filterModeTabs = computed(() => ([
     subtitle: `默认名隐藏，最低 Lv.${HIGH_QUALITY_FRIEND_LEVEL}`,
     active: isHighQualityPresetActive.value,
     icon: 'i-carbon-star-filled',
-    activeClass: 'border-emerald-400 bg-emerald-500/12 text-emerald-900 ring-2 ring-emerald-400/20',
-    badgeClass: 'bg-emerald-500 text-white',
+    activeClass: 'friends-view-card friends-view-card-active friends-view-card-quality',
+    badgeClass: 'friends-view-card-badge friends-view-card-badge-quality',
     onClick: applyHighQualityFriendPreset,
   },
   {
@@ -477,8 +618,8 @@ const filterModeTabs = computed(() => ([
     subtitle: '关闭默认过滤条件',
     active: isShowAllPresetActive.value,
     icon: 'i-carbon-user-multiple',
-    activeClass: 'border-slate-400 bg-slate-500/12 text-slate-900 ring-2 ring-slate-400/20',
-    badgeClass: 'bg-slate-600 text-white',
+    activeClass: 'friends-view-card friends-view-card-active friends-view-card-all',
+    badgeClass: 'friends-view-card-badge friends-view-card-badge-all',
     onClick: showAllFriendsQuickly,
   },
 ]))
@@ -1218,16 +1359,16 @@ function getInspectionReasonBadges(friend: any) {
           <button
             v-for="tab in filterModeTabs"
             :key="tab.key"
-            class="rounded-xl border px-4 py-3 text-left transition"
+            class="friends-view-card rounded-xl border px-4 py-3 text-left transition"
             :class="tab.active
               ? tab.activeClass
-              : 'border-white/10 bg-white/40 hover:border-primary-300 hover:bg-white/70'"
+              : 'friends-view-card-idle'"
             @click="tab.onClick()"
           >
             <div class="flex items-center justify-between gap-3">
               <div class="flex items-start gap-3">
                 <div
-                  class="mt-0.5 text-lg"
+                  class="friends-view-card-icon mt-0.5 text-lg"
                   :class="tab.icon"
                 />
                 <div class="text-sm font-semibold">
@@ -1239,7 +1380,7 @@ function getInspectionReasonBadges(friend: any) {
               </div>
               <div
                 class="rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                :class="tab.active ? tab.badgeClass : 'bg-black/5 text-slate-500'"
+                :class="tab.active ? tab.badgeClass : 'friends-view-card-badge friends-view-card-badge-idle'"
               >
                 {{ tab.active ? '当前' : '切换' }}
               </div>
@@ -1279,22 +1420,22 @@ function getInspectionReasonBadges(friend: any) {
           </label>
         </div>
       </div>
-      <div class="mt-3 flex flex-col gap-3 rounded-xl border border-[#d8e7dd] bg-white/60 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+      <div class="friends-inspection-panel mt-3 flex flex-col gap-3 rounded-xl px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
         <div class="flex items-start gap-3">
-          <div class="i-carbon-filter text-lg text-[#4f6b57]" />
+          <div class="friends-inspection-icon i-carbon-filter text-lg" />
           <div>
             <div
               v-if="inspectionActionNotice"
-              class="mb-3 inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800"
+              class="friends-inline-notice mb-3 inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium"
             >
               <span class="i-carbon-checkmark-filled text-base" />
               <span>{{ inspectionActionNotice.text }}</span>
             </div>
-            <div class="text-sm font-semibold text-[#35533d]">
+            <div class="friends-inspection-title text-sm font-semibold">
               当前过滤摘要
             </div>
             <div
-              class="mt-2 inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold"
+              class="mt-2 inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold"
               :class="activeFilterMode.toneClass"
             >
               {{ activeFilterMode.label }}
@@ -1302,7 +1443,7 @@ function getInspectionReasonBadges(friend: any) {
             <div class="friends-summary-note mt-1 text-sm leading-6">
               {{ activeFilterMode.desc }}
             </div>
-            <div class="mt-2 inline-flex items-center rounded-full border border-[#d8e7dd] bg-white/80 px-2.5 py-1 text-xs font-medium text-[#4f6b57]">
+            <div class="friends-mode-pill friends-mode-pill-inspection mt-2 inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium">
               {{ inspectionViewMeta.label }}
             </div>
             <div class="friends-summary-note mt-1 text-sm leading-6">
@@ -1311,10 +1452,10 @@ function getInspectionReasonBadges(friend: any) {
             <div class="mt-2 flex flex-wrap items-center gap-2">
               <button
                 v-if="hideDefaultNamedFriends"
-                class="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 transition"
+                class="friends-summary-chip friends-summary-chip-amber rounded-full px-3 py-1 text-xs font-semibold transition"
                 :class="[
-                  isInspectionDefaultNamed ? 'ring-2 ring-amber-300' : '',
-                  highlightedSummaryKey === 'default_named' ? 'scale-105 shadow-md shadow-amber-200/70' : '',
+                  isInspectionDefaultNamed ? 'friends-summary-chip-active' : '',
+                  highlightedSummaryKey === 'default_named' ? 'friends-summary-chip-pulse' : '',
                 ]"
                 @click="inspectDefaultNamedFriends"
               >
@@ -1322,30 +1463,30 @@ function getInspectionReasonBadges(friend: any) {
               </button>
               <button
                 v-if="hideLowLevelFriends"
-                class="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-800 transition"
+                class="friends-summary-chip friends-summary-chip-orange rounded-full px-3 py-1 text-xs font-semibold transition"
                 :class="[
-                  isInspectionLowLevel ? 'ring-2 ring-orange-300' : '',
-                  highlightedSummaryKey === 'low_level' ? 'scale-105 shadow-md shadow-orange-200/70' : '',
+                  isInspectionLowLevel ? 'friends-summary-chip-active' : '',
+                  highlightedSummaryKey === 'low_level' ? 'friends-summary-chip-pulse' : '',
                 ]"
                 @click="inspectLowLevelFriends"
               >
                 低等级隐藏 {{ hiddenByLevelCount }}
               </button>
               <button
-                class="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 transition"
+                class="friends-summary-chip friends-summary-chip-emerald rounded-full px-3 py-1 text-xs font-semibold transition"
                 :class="[
-                  isInspectionVisible ? 'ring-2 ring-emerald-300' : '',
-                  highlightedSummaryKey === 'visible' ? 'scale-105 shadow-md shadow-emerald-200/70' : '',
+                  isInspectionVisible ? 'friends-summary-chip-active' : '',
+                  highlightedSummaryKey === 'visible' ? 'friends-summary-chip-pulse' : '',
                 ]"
                 @click="inspectVisibleFriends"
               >
                 当前展示 {{ filteredFriends.length }}
               </button>
               <button
-                class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700 transition"
+                class="friends-summary-chip friends-summary-chip-slate rounded-full px-3 py-1 text-xs font-semibold transition"
                 :class="[
-                  isInspectionAll ? 'ring-2 ring-slate-300' : '',
-                  highlightedSummaryKey === 'all' ? 'scale-105 shadow-md shadow-slate-200/70' : '',
+                  isInspectionAll ? 'friends-summary-chip-active' : '',
+                  highlightedSummaryKey === 'all' ? 'friends-summary-chip-pulse' : '',
                 ]"
                 @click="showAllFriendsQuickly"
               >
@@ -1361,18 +1502,54 @@ function getInspectionReasonBadges(friend: any) {
               </template>
             </div>
             <div
-              v-if="isInspectionDefaultNamed || isInspectionLowLevel"
-              class="mt-2 flex flex-wrap items-center gap-2"
+              v-if="showInspectionStatusFilters"
+              class="mt-2"
             >
-              <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  class="friends-status-filter-chip rounded-full px-3 py-1 text-xs font-semibold transition"
+                  :class="inspectionStatusFilter === 'all'
+                    ? 'friends-status-filter-chip-active friends-status-filter-chip-all'
+                    : 'friends-status-filter-chip-idle'"
+                  @click="inspectionStatusFilter = 'all'"
+                >
+                  全部状态 ({{ inspectionTotalCount }})
+                </button>
+                <button
+                  class="friends-status-filter-chip rounded-full px-3 py-1 text-xs font-semibold transition"
+                  :class="inspectionStatusFilter === 'unblacklisted'
+                    ? 'friends-status-filter-chip-active friends-status-filter-chip-emerald'
+                    : 'friends-status-filter-chip-idle'"
+                  @click="inspectionStatusFilter = 'unblacklisted'"
+                >
+                  仅未拉黑 ({{ inspectionUnblacklistedCount }})
+                </button>
+                <button
+                  class="friends-status-filter-chip rounded-full px-3 py-1 text-xs font-semibold transition"
+                  :class="inspectionStatusFilter === 'blacklisted'
+                    ? 'friends-status-filter-chip-active friends-status-filter-chip-rose'
+                    : 'friends-status-filter-chip-idle'"
+                  @click="inspectionStatusFilter = 'blacklisted'"
+                >
+                  仅已拉黑 ({{ inspectionBlacklistedCount }})
+                </button>
+              </div>
+              <div class="friends-summary-note mt-2 text-sm leading-6">
+                {{ inspectionStatusSummaryLabel }}
+              </div>
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                class="friends-summary-chip friends-summary-chip-slate rounded-full px-3 py-1 text-xs font-semibold"
+              >
                 当前检查结果 {{ filteredFriends.length }} 人
-              </span>
-              <span class="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+              </button>
+              <button class="friends-summary-chip friends-summary-chip-emerald rounded-full px-3 py-1 text-xs font-semibold">
                 未拉黑 {{ inspectionUnblacklistedCount }}
-              </span>
-              <span class="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-800">
+              </button>
+              <button class="friends-summary-chip friends-summary-chip-rose rounded-full px-3 py-1 text-xs font-semibold">
                 已拉黑 {{ inspectionBlacklistedCount }}
-              </span>
+              </button>
             </div>
             <div v-if="canBulkBlacklistInspection" class="mt-3 flex flex-wrap items-center gap-2">
               <button
@@ -1380,6 +1557,24 @@ function getInspectionReasonBadges(friend: any) {
                 @click="selectInspectionFriends"
               >
                 一键选中当前检查结果
+              </button>
+              <button
+                class="friends-refresh-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="copyInspectionGids"
+              >
+                复制 gid/name/level
+              </button>
+              <button
+                class="friends-refresh-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="downloadInspectionGids"
+              >
+                导出 TXT
+              </button>
+              <button
+                class="friends-refresh-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
+                @click="downloadInspectionCsv"
+              >
+                导出 CSV
               </button>
               <button
                 class="friends-refresh-btn friends-clear-btn h-[34px] rounded-lg px-3 text-sm font-medium transition"
@@ -1887,6 +2082,212 @@ function getInspectionReasonBadges(friend: any) {
 
 .friends-summary-note {
   color: var(--ui-text-2) !important;
+}
+
+.friends-view-card {
+  border-color: color-mix(in srgb, var(--ui-border-subtle) 92%, transparent) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-bg-surface-raised) 74%, transparent), color-mix(in srgb, var(--ui-bg-surface) 82%, transparent)) !important;
+  color: var(--ui-text-1);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+}
+
+.friends-view-card:hover {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 22%, var(--ui-border-subtle)) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-brand-500) 8%, var(--ui-bg-surface-raised)), color-mix(in srgb, var(--ui-bg-surface) 88%, transparent)) !important;
+}
+
+.friends-view-card-idle {
+  color: var(--ui-text-1);
+}
+
+.friends-view-card-active {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ui-brand-500) 12%, transparent),
+    0 10px 28px color-mix(in srgb, black 16%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
+}
+
+.friends-view-card-default {
+  border-color: color-mix(in srgb, var(--ui-status-info) 32%, var(--ui-border-subtle)) !important;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-status-info) 16%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-bg-surface-raised) 84%, transparent), color-mix(in srgb, var(--ui-bg-surface) 92%, transparent)) !important;
+}
+
+.friends-view-card-quality {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 34%, var(--ui-border-subtle)) !important;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-brand-500) 18%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-bg-surface-raised) 84%, transparent), color-mix(in srgb, var(--ui-bg-surface) 92%, transparent)) !important;
+}
+
+.friends-view-card-all {
+  border-color: color-mix(in srgb, var(--ui-text-2) 30%, var(--ui-border-subtle)) !important;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-text-2) 14%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-bg-surface-raised) 82%, transparent), color-mix(in srgb, var(--ui-bg-surface) 90%, transparent)) !important;
+}
+
+.friends-view-card-icon {
+  color: color-mix(in srgb, var(--ui-text-1) 88%, var(--ui-brand-500));
+}
+
+.friends-view-card-badge {
+  border: 1px solid transparent;
+}
+
+.friends-view-card-badge-idle {
+  border-color: color-mix(in srgb, var(--ui-border-subtle) 92%, transparent);
+  background: color-mix(in srgb, var(--ui-bg-surface-raised) 72%, transparent);
+  color: var(--ui-text-2);
+}
+
+.friends-view-card-badge-default {
+  background: color-mix(in srgb, var(--ui-status-info) 84%, var(--ui-text-1));
+  color: white;
+}
+
+.friends-view-card-badge-quality {
+  background: color-mix(in srgb, var(--ui-brand-500) 86%, var(--ui-text-1));
+  color: white;
+}
+
+.friends-view-card-badge-all {
+  background: color-mix(in srgb, var(--ui-text-2) 82%, var(--ui-text-1));
+  color: white;
+}
+
+.friends-inspection-panel {
+  border: 1px solid color-mix(in srgb, var(--ui-brand-500) 14%, var(--ui-border-subtle));
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--ui-brand-500) 10%, transparent), transparent 32%),
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-bg-surface-raised) 82%, transparent), color-mix(in srgb, var(--ui-bg-surface) 90%, transparent));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent),
+    0 12px 32px color-mix(in srgb, black 14%, transparent);
+}
+
+.friends-inspection-icon {
+  color: color-mix(in srgb, var(--ui-brand-500) 72%, var(--ui-text-1));
+}
+
+.friends-inspection-title {
+  color: var(--ui-text-1);
+}
+
+.friends-inline-notice {
+  border: 1px solid color-mix(in srgb, var(--ui-status-success) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-success) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-success) 80%, white);
+}
+
+.friends-mode-pill {
+  border: 1px solid color-mix(in srgb, var(--ui-border-subtle) 90%, transparent);
+}
+
+.friends-mode-pill-default {
+  border-color: color-mix(in srgb, var(--ui-status-info) 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-info) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-info) 84%, white);
+}
+
+.friends-mode-pill-quality {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-brand-500) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-brand-500) 86%, white);
+}
+
+.friends-mode-pill-all {
+  border-color: color-mix(in srgb, var(--ui-text-2) 30%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-text-2) 12%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-text-1) 84%, var(--ui-text-2));
+}
+
+.friends-mode-pill-custom {
+  border-color: color-mix(in srgb, var(--ui-status-warning) 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-warning) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-warning) 84%, white);
+}
+
+.friends-mode-pill-inspection {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 18%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-bg-surface-raised) 84%, transparent);
+  color: var(--ui-text-2);
+}
+
+.friends-summary-chip,
+.friends-status-filter-chip {
+  border: 1px solid color-mix(in srgb, var(--ui-border-subtle) 90%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 4%, transparent);
+}
+
+.friends-summary-chip-active,
+.friends-status-filter-chip-active {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--ui-brand-500) 16%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+}
+
+.friends-summary-chip-pulse {
+  transform: scale(1.05);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, black 16%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 6%, transparent);
+}
+
+.friends-summary-chip-amber {
+  border-color: color-mix(in srgb, #f59e0b 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, #f59e0b 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, #f59e0b 82%, white);
+}
+
+.friends-summary-chip-orange {
+  border-color: color-mix(in srgb, var(--ui-status-warning) 36%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-warning) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-warning) 84%, white);
+}
+
+.friends-summary-chip-emerald {
+  border-color: color-mix(in srgb, var(--ui-brand-500) 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-brand-500) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-brand-500) 86%, white);
+}
+
+.friends-summary-chip-slate {
+  border-color: color-mix(in srgb, var(--ui-text-2) 28%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-text-2) 12%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-text-1) 84%, var(--ui-text-2));
+}
+
+.friends-summary-chip-rose {
+  border-color: color-mix(in srgb, var(--ui-status-danger) 34%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-danger) 12%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-danger) 84%, white);
+}
+
+.friends-status-filter-chip-idle {
+  background: color-mix(in srgb, var(--ui-bg-surface-raised) 76%, transparent);
+  color: var(--ui-text-2);
+}
+
+.friends-status-filter-chip-all {
+  border-color: color-mix(in srgb, var(--ui-status-info) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-info) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-info) 84%, white);
+}
+
+.friends-status-filter-chip-emerald {
+  border-color: color-mix(in srgb, var(--ui-status-success) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-success) 14%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-success) 84%, white);
+}
+
+.friends-status-filter-chip-rose {
+  border-color: color-mix(in srgb, var(--ui-status-danger) 32%, var(--ui-border-subtle));
+  background: color-mix(in srgb, var(--ui-status-danger) 12%, var(--ui-bg-surface-raised));
+  color: color-mix(in srgb, var(--ui-status-danger) 84%, white);
 }
 
 .friends-toolbar {

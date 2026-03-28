@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.50',
+    date: '2026-03-28',
+    title: '好友页巡检台导出与状态筛选增强',
+    summary: '好友页新增按拉黑状态筛选巡检结果、复制 `gid/name/level`、导出 TXT/CSV 和巡检卡片视觉统一，方便批量核对与外部留档。',
+  },
+  {
     version: 'v4.5.49',
     date: '2026-03-28',
     title: '好友页筛选巡检台与发布口径补齐',

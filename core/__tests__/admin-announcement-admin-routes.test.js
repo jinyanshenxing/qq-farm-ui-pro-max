@@ -230,10 +230,10 @@ test('announcement sync route prefers structured materializer results when provi
             updated: 1,
             skipped: 3,
             totalParsed: 6,
-            latestVersion: 'v4.5.49',
+            latestVersion: 'v4.5.50',
             sources: { release_cache: 4, embedded: 2 },
             entries: [
-                { title: '版本更新', version: 'v4.5.49', publishDate: '2026-03-28', summary: '好友页筛选巡检台与发布口径补齐', sourceType: 'release_cache' },
+                { title: '版本更新', version: 'v4.5.50', publishDate: '2026-03-28', summary: '好友页巡检台导出与状态筛选增强', sourceType: 'release_cache' },
             ],
         }),
         getIo: () => ({
@@ -255,16 +255,16 @@ test('announcement sync route prefers structured materializer results when provi
             updated: 1,
             skipped: 3,
             totalParsed: 6,
-            latestVersion: 'v4.5.49',
+            latestVersion: 'v4.5.50',
             sources: { release_cache: 4, embedded: 2 },
             sourceStats: { release_cache: 4, embedded: 2 },
             previewCount: 3,
             entries: [
                 {
                     title: '版本更新',
-                    version: 'v4.5.49',
+                    version: 'v4.5.50',
                     publishDate: '2026-03-28',
-                    summary: '好友页筛选巡检台与发布口径补齐',
+                    summary: '好友页巡检台导出与状态筛选增强',
                     sourceType: 'release_cache',
                     releaseUrl: '',
                 },
@@ -274,16 +274,16 @@ test('announcement sync route prefers structured materializer results when provi
         updated: 1,
         skipped: 3,
         totalParsed: 6,
-        latestVersion: 'v4.5.49',
+        latestVersion: 'v4.5.50',
         sources: { release_cache: 4, embedded: 2 },
         sourceStats: { release_cache: 4, embedded: 2 },
         previewCount: 3,
         entries: [
             {
                 title: '版本更新',
-                version: 'v4.5.49',
+                version: 'v4.5.50',
                 publishDate: '2026-03-28',
-                summary: '好友页筛选巡检台与发布口径补齐',
+                summary: '好友页巡检台导出与状态筛选增强',
                 sourceType: 'release_cache',
                 releaseUrl: '',
             },
@@ -304,7 +304,7 @@ test('announcement sync route supports dry run without emitting updates', async 
                 updated: 0,
                 skipped: 2,
                 totalParsed: 3,
-                latestVersion: 'v4.5.49',
+                latestVersion: 'v4.5.50',
                 sources: { embedded: 3 },
             };
         },
@@ -335,7 +335,7 @@ test('announcement sync route supports dry run without emitting updates', async 
     }]);
     assert.deepEqual(ioCalls, []);
     assert.equal(res.body.previewCount, 1);
-    assert.equal(res.body.data.latestVersion, 'v4.5.49');
+    assert.equal(res.body.data.latestVersion, 'v4.5.50');
 });
 
 test('third-party api get route blocks non-admin users', async () => {
