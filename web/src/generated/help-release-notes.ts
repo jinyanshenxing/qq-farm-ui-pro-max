@@ -3,6 +3,12 @@
 
 export const helpReleaseNotes = [
   {
+    version: 'v4.5.48',
+    date: '2026-03-28',
+    title: 'QQ 好友页发布构建热修与版本收口',
+    summary: '移除 Friends 页未消费的隐藏计数计算值，修复正式 `vue-tsc` 发布构建阻塞，并把默认镜像标签、Release/mock 版本和部署口径统一抬升到真正可发布的热修版本。',
+  },
+  {
     version: 'v4.5.47',
     date: '2026-03-28',
     title: 'QQ 好友手动导入 SyncAll 与身份链路继续收口',

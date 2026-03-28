@@ -382,7 +382,7 @@ test('system update sync announcements route forwards dry-run and markInstalled 
                 updated: 0,
                 skipped: 2,
                 totalParsed: 3,
-                latestVersion: 'v4.5.47',
+                latestVersion: 'v4.5.48',
                 sources: { embedded: 3 },
                 entries: [],
             };
@@ -398,7 +398,7 @@ test('system update sync announcements route forwards dry-run and markInstalled 
             dryRun: true,
             limit: 9,
             sourceTypes: ['embedded'],
-            markInstalled: 'v4.5.47',
+            markInstalled: 'v4.5.48',
         },
     }, res);
 
@@ -409,7 +409,7 @@ test('system update sync announcements route forwards dry-run and markInstalled 
         sourceTypes: ['embedded'],
         limit: 9,
         dryRun: true,
-        markInstalled: 'v4.5.47',
+        markInstalled: 'v4.5.48',
     });
     assert.equal(syncCalls[1].dryRun, true);
     assert.equal(res.body.data.syncResult.previewCount, 1);

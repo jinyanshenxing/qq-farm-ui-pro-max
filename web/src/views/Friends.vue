@@ -38,6 +38,9 @@ const importHexText = ref('')
 const showImportHexModal = ref(false)
 const importHexPrefillPending = ref(false)
 const importHexTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const hideDefaultNamedFriends = ref(true)
+const hideLowLevelFriends = ref(true)
+const minVisibleFriendLevel = ref(2)
 
 function confirmAction(msg: string, action: () => Promise<void>) {
   confirmMessage.value = msg
@@ -89,6 +92,35 @@ function formatDateTime(ts: number) {
   if (!value)
     return '-'
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+function loadFriendFilterPrefs() {
+  if (typeof window === 'undefined')
+    return
+  try {
+    const raw = window.localStorage.getItem('friend-view-filter-prefs')
+    if (!raw)
+      return
+    const parsed = JSON.parse(raw)
+    hideDefaultNamedFriends.value = parsed?.hideDefaultNamedFriends !== false
+    hideLowLevelFriends.value = parsed?.hideLowLevelFriends !== false
+    minVisibleFriendLevel.value = Math.max(1, Number(parsed?.minVisibleFriendLevel || 2))
+  }
+  catch {
+    hideDefaultNamedFriends.value = true
+    hideLowLevelFriends.value = true
+    minVisibleFriendLevel.value = 2
+  }
+}
+
+function persistFriendFilterPrefs() {
+  if (typeof window === 'undefined')
+    return
+  window.localStorage.setItem('friend-view-filter-prefs', JSON.stringify({
+    hideDefaultNamedFriends: hideDefaultNamedFriends.value,
+    hideLowLevelFriends: hideLowLevelFriends.value,
+    minVisibleFriendLevel: Math.max(1, Number(minVisibleFriendLevel.value || 2)),
+  }))
 }
 
 async function loadFriends(options: { manualRefresh?: boolean } = {}) {
@@ -174,6 +206,7 @@ useIntervalFn(() => {
 }, 1000)
 
 onMounted(() => {
+  loadFriendFilterPrefs()
   loadFriends()
   window.addEventListener('keydown', handleImportHexModalKeydown)
 })
@@ -192,18 +225,55 @@ watch(() => currentAccountId.value, () => {
   loadFriends()
 })
 
+watch([hideDefaultNamedFriends, hideLowLevelFriends, minVisibleFriendLevel], () => {
+  minVisibleFriendLevel.value = Math.max(1, Number(minVisibleFriendLevel.value || 1))
+  persistFriendFilterPrefs()
+})
+
 // Search state
 const searchQuery = ref('')
 
+function isDefaultNamedFriend(friend: any) {
+  const name = String(friend?.name || '').trim()
+  const remark = String(friend?.remark || '').trim()
+  return name === '小小农夫' || remark === '小小农夫'
+}
+
+function getFriendLevel(friend: any) {
+  return Math.max(0, Number(friend?.farmLevel || friend?.level || 0))
+}
+
 const filteredFriends = computed(() => {
-  if (!searchQuery.value)
-    return friends.value
   const q = searchQuery.value.toLowerCase()
   return friends.value.filter((f: any) => {
+    if (hideDefaultNamedFriends.value && isDefaultNamedFriend(f))
+      return false
+    if (hideLowLevelFriends.value && getFriendLevel(f) < Math.max(1, Number(minVisibleFriendLevel.value || 1)))
+      return false
+    if (!q)
+      return true
     const nameStr = String(f.name || f.nick || f.userName || f.id || '').toLowerCase()
-    return nameStr.includes(q)
+    const remarkStr = String(f.remark || '').toLowerCase()
+    return nameStr.includes(q) || remarkStr.includes(q)
   })
 })
+
+const hiddenByDefaultNameCount = computed(() =>
+  friends.value.filter((friend: any) => isDefaultNamedFriend(friend)).length,
+)
+
+const hiddenByLevelCount = computed(() =>
+  friends.value.filter((friend: any) =>
+    getFriendLevel(friend) < Math.max(1, Number(minVisibleFriendLevel.value || 1))
+    && (!hideDefaultNamedFriends.value || !isDefaultNamedFriend(friend)),
+  ).length,
+)
+
+const hideDefaultNamedFriendsLabel = computed(() => `(${hiddenByDefaultNameCount.value})`)
+
+const hideLowLevelFriendsLabel = computed(() =>
+  `(< ${minVisibleFriendLevel.value}) ${hiddenByLevelCount.value}`,
+)
 
 const isWechatAccount = computed(() => {
   return isWechatFriendPlatform(currentAccount.value?.platform || friendFetchMeta.value?.platform || '')
@@ -816,6 +886,41 @@ function getFriendStatusClass(friend: any) {
       </div>
     </div>
 
+    <div class="glass-panel mb-4 rounded-xl p-4 shadow">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <div class="text-sm font-semibold">
+            默认过滤
+          </div>
+          <div class="friends-summary-note mt-1 text-xs leading-5">
+            默认隐藏“名称为小小农夫/默认占位名”的账号，以及低等级小号。你可以随时调整下面的筛选条件。
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+	          <label class="flex items-center gap-2 text-sm">
+	            <input v-model="hideDefaultNamedFriends" type="checkbox" class="h-4 w-4">
+	            <span>隐藏默认名</span>
+	            <span class="friends-summary-note text-xs">{{ hideDefaultNamedFriendsLabel }}</span>
+	          </label>
+	          <label class="flex items-center gap-2 text-sm">
+	            <input v-model="hideLowLevelFriends" type="checkbox" class="h-4 w-4">
+	            <span>隐藏低等级</span>
+	            <span class="friends-summary-note text-xs">{{ hideLowLevelFriendsLabel }}</span>
+	          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <span>最低显示等级</span>
+            <input
+              v-model.number="minVisibleFriendLevel"
+              type="number"
+              min="1"
+              max="999"
+              class="friends-search-input glass-text-main h-[34px] w-20 rounded-lg px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            >
+          </label>
+        </div>
+      </div>
+    </div>
+
     <div class="friends-toolbar ui-mobile-sticky-toolbar mb-4">
       <div class="ui-bulk-actions">
         <button class="batch-btn" :class="{ active: selectionMode }" :disabled="!canMutateFriends" @click="toggleSelectionMode">
@@ -968,7 +1073,7 @@ function getFriendStatusClass(friend: any) {
 
     <div v-else>
       <div v-if="filteredFriends.length === 0" class="glass-panel glass-text-muted mb-4 rounded-lg p-8 text-center shadow">
-        没有匹配的好友
+        当前筛选条件下没有可显示的好友
       </div>
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2 xl:grid-cols-4">
         <div

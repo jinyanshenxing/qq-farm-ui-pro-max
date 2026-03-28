@@ -15,7 +15,7 @@ test('announcement runtime falls back to changelog quick index when update log i
                     '',
                     '## 快速索引（精简版）',
                     '',
-                    '- `v4.5.47 (2026-03-28)` QQ 好友手动导入 SyncAll 与身份链路继续收口：新增手动导入 QQ 好友 SyncAll，好友缓存与访客身份继续按当前登录身份隔离透传。',
+                    '- `v4.5.48 (2026-03-28)` QQ 好友页发布构建热修与版本收口：移除 Friends 页未消费的隐藏计数计算值，修复正式 vue-tsc 发布构建阻塞。',
                     '- `v4.5.39 (2026-03-25)` 旧版本说明：补齐最近一轮功能摘要。',
                     '',
                     '> 说明：demo',
@@ -29,11 +29,11 @@ test('announcement runtime falls back to changelog quick index when update log i
 
     assert.deepEqual(entries, [
         {
-            title: 'QQ 好友手动导入 SyncAll 与身份链路继续收口',
-            version: 'v4.5.47',
+            title: 'QQ 好友页发布构建热修与版本收口',
+            version: 'v4.5.48',
             publishDate: '2026-03-28',
-            content: '新增手动导入 QQ 好友 SyncAll，好友缓存与访客身份继续按当前登录身份隔离透传。',
-            summary: '新增手动导入 QQ 好友 SyncAll，好友缓存与访客身份继续按当前登录身份隔离透传。',
+            content: '移除 Friends 页未消费的隐藏计数计算值，修复正式 vue-tsc 发布构建阻塞。',
+            summary: '移除 Friends 页未消费的隐藏计数计算值，修复正式 vue-tsc 发布构建阻塞。',
             sourceType: 'embedded',
             sourceKey: entries[0].sourceKey,
             releaseUrl: '',
@@ -65,7 +65,7 @@ test('announcement materializer updates legacy announcement rows by version/date
         getAnnouncementsRef: async () => [{
             id: 7,
             title: '旧公告标题',
-            version: 'v4.5.47',
+            version: 'v4.5.48',
             publish_date: '2026-03-28',
             content: 'old',
             summary: '',
@@ -81,11 +81,11 @@ test('announcement materializer updates legacy announcement rows by version/date
         },
         getSystemUpdateReleaseCacheRef: async () => ({
             releases: [{
-                versionTag: 'v4.5.47',
+                versionTag: 'v4.5.48',
                 title: '首装/更新主路径 GitHub Raw 兜底补齐',
                 publishedAt: '2026-03-28T08:00:00.000Z',
                 notes: 'new notes',
-                url: 'https://example.com/releases/v4.5.47',
+                url: 'https://example.com/releases/v4.5.48',
                 assets: [{ name: 'bundle.tar.gz', url: 'https://example.com/bundle.tar.gz', size: 123 }],
             }],
         }),
@@ -102,11 +102,11 @@ test('announcement materializer updates legacy announcement rows by version/date
     assert.equal(saveCalls.length, 1);
     assert.equal(saveCalls[0].id, 7);
     assert.equal(saveCalls[0].title, '首装/更新主路径 GitHub Raw 兜底补齐');
-    assert.equal(saveCalls[0].version, 'v4.5.47');
+    assert.equal(saveCalls[0].version, 'v4.5.48');
     assert.equal(saveCalls[0].publish_date, '2026-03-28');
     assert.equal(saveCalls[0].summary, 'new notes');
     assert.equal(saveCalls[0].sourceType, 'release_cache');
-    assert.equal(saveCalls[0].releaseUrl, 'https://example.com/releases/v4.5.47');
+    assert.equal(saveCalls[0].releaseUrl, 'https://example.com/releases/v4.5.48');
     assert.deepEqual(saveCalls[0].assets, [{
         name: 'bundle.tar.gz',
         url: 'https://example.com/bundle.tar.gz',
