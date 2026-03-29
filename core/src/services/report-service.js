@@ -550,21 +550,30 @@ function createReportService(options = {}) {
         const liveDetails = await collectLiveDetails(accountId, runtimeStatus, dataProvider);
         const mergedNotes = [...notes, ...(liveDetails.notes || [])];
         const payload = buildReportPayload(mode, account, runtimeStatus, diff, reportConfig || {}, mergedNotes, liveDetails);
-        const delivery = await sendPushooMessage({
-            channel: reportConfig.channel,
-            endpoint: reportConfig.endpoint,
-            token: reportConfig.token,
-            smtpHost: reportConfig.smtpHost,
-            smtpPort: reportConfig.smtpPort,
-            smtpSecure: reportConfig.smtpSecure,
-            smtpUser: reportConfig.smtpUser,
-            smtpPass: reportConfig.smtpPass,
-            emailFrom: reportConfig.emailFrom,
-            emailTo: reportConfig.emailTo,
-            title: payload.title,
-            content: payload.content,
-            html: payload.html,
-        });
+        let delivery;
+        try {
+            delivery = await sendPushooMessage({
+                channel: reportConfig.channel,
+                endpoint: reportConfig.endpoint,
+                token: reportConfig.token,
+                smtpHost: reportConfig.smtpHost,
+                smtpPort: reportConfig.smtpPort,
+                smtpSecure: reportConfig.smtpSecure,
+                smtpUser: reportConfig.smtpUser,
+                smtpPass: reportConfig.smtpPass,
+                emailFrom: reportConfig.emailFrom,
+                emailTo: reportConfig.emailTo,
+                title: payload.title,
+                content: payload.content,
+                html: payload.html,
+            });
+        } catch (error) {
+            delivery = {
+                ok: false,
+                code: 'error',
+                msg: error && error.message ? error.message : String(error || '发送失败'),
+            };
+        }
 
         try {
             await insertReportLog({
