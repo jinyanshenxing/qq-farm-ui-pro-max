@@ -821,3 +821,61 @@ test('saveSettings tradeConfig drives sell preview before and after store reload
         fs.rmSync(tempRoot, { recursive: true, force: true });
     }
 });
+
+test('QQ high-risk window unlimited mode survives reload and duration changes refresh the live window', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'store-qq-high-risk-window-'));
+    const restoreRuntimePaths = mockModule(runtimePathsModulePath, createRuntimePathsMock(tempRoot));
+    const mysqlMock = createMysqlMock();
+    const restoreMysql = mockModule(mysqlDbModulePath, mysqlMock);
+
+    try {
+        delete require.cache[storeModulePath];
+        delete require.cache[systemSettingsModulePath];
+        let store = require(storeModulePath);
+
+        const createdAccounts = store.addOrUpdateAccount({ name: '高风险窗口测试', platform: 'qq', uin: '2001', username: 'admin' });
+        const accountId = String((createdAccounts.accounts[createdAccounts.accounts.length - 1] || {}).id || '');
+        assert.equal(accountId, '1');
+
+        store.applyConfigSnapshot({
+            automation: {
+                fastHarvest: true,
+            },
+            qqHighRiskWindow: {
+                durationMinutes: 0,
+            },
+        }, { accountId });
+
+        let snapshot = store.getConfigSnapshot(accountId);
+        assert.equal(snapshot.automation.fastHarvest, true);
+        assert.equal(snapshot.qqHighRiskWindow.durationMinutes, 0);
+        assert.equal(snapshot.qqHighRiskWindow.expiresAt, 0);
+
+        store.applyConfigSnapshot({
+            qqHighRiskWindow: {
+                durationMinutes: 240,
+            },
+        }, { accountId });
+
+        snapshot = store.getConfigSnapshot(accountId);
+        assert.equal(snapshot.automation.fastHarvest, true);
+        assert.equal(snapshot.qqHighRiskWindow.durationMinutes, 240);
+        assert.ok(snapshot.qqHighRiskWindow.expiresAt > Date.now());
+        await store.flushGlobalConfigSave();
+
+        delete require.cache[storeModulePath];
+        delete require.cache[systemSettingsModulePath];
+        store = require(storeModulePath);
+        await store.initStoreRuntime();
+
+        snapshot = store.getConfigSnapshot(accountId);
+        assert.equal(snapshot.automation.fastHarvest, true);
+        assert.equal(snapshot.qqHighRiskWindow.durationMinutes, 240);
+    } finally {
+        delete require.cache[storeModulePath];
+        delete require.cache[systemSettingsModulePath];
+        restoreRuntimePaths();
+        restoreMysql();
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+});

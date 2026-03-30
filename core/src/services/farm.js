@@ -4,7 +4,7 @@
 
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../config/config');
-const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId } = require('../config/gameConfig');
+const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getPlantBySeedId, getSeedImageBySeedId, getSeedPlantSize } = require('../config/gameConfig');
 const { isAutomationOn, getPreferredSeed, getAutomation, getPlantingStrategy, recordSuspendUntil, getTimingConfig, getConfigSnapshot } = require('../models/store');
 const { sendMsgAsync, sendMsgAsyncUrgent, getUserState, networkEvents, getWsErrorState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -79,6 +79,66 @@ function logWeChatSuspendGuard(cacheKey, message, meta = {}) {
         platform: CONFIG.platform,
         ...meta,
     });
+}
+
+function resolveTotalGrowTimeSec(plant, matureBeginSec = 0, plantCfg = null) {
+    const phases = Array.isArray(plant && plant.phases) ? plant.phases : [];
+    const matureBegin = toNum(matureBeginSec);
+    let phaseDerivedTotal = 0;
+    if (matureBegin > 0 && phases.length > 0) {
+        const beginCandidates = phases
+            .map(phase => toTimeSec(phase && phase.begin_time))
+            .filter(sec => sec > 0 && sec <= matureBegin);
+        if (beginCandidates.length > 0) {
+            phaseDerivedTotal = Math.max(0, matureBegin - Math.min(...beginCandidates));
+        }
+    }
+
+    const configGrowTime = getPlantGrowTime(toNum(plant && plant.id))
+        || getPlantGrowTime(toNum(plantCfg && plantCfg.id))
+        || 0;
+
+    return Math.max(phaseDerivedTotal, configGrowTime, 0);
+}
+
+function resolvePhaseProgressMeta(phases, currentPhase, nowSec) {
+    const list = Array.isArray(phases) ? phases : [];
+    if (!currentPhase || list.length === 0) {
+        return {
+            currentPhaseStartSec: 0,
+            currentPhaseEndSec: 0,
+            currentPhaseDurationSec: 0,
+            currentPhaseRemainingSec: 0,
+            currentPhaseElapsedSec: 0,
+            currentPhaseProgress: 0,
+        };
+    }
+
+    const currentIndex = list.findIndex(phase => phase === currentPhase || toNum(phase && phase.phase) === toNum(currentPhase && currentPhase.phase));
+    const currentPhaseStartSec = toTimeSec(currentPhase.begin_time);
+    const nextPhase = currentIndex >= 0 ? list[currentIndex + 1] : null;
+    const currentPhaseEndSec = nextPhase ? toTimeSec(nextPhase.begin_time) : 0;
+    const currentPhaseDurationSec = currentPhaseStartSec > 0 && currentPhaseEndSec > currentPhaseStartSec
+        ? (currentPhaseEndSec - currentPhaseStartSec)
+        : 0;
+    const currentPhaseElapsedSec = currentPhaseDurationSec > 0
+        ? Math.max(0, Math.min(currentPhaseDurationSec, nowSec - currentPhaseStartSec))
+        : 0;
+    const currentPhaseRemainingSec = currentPhaseDurationSec > 0
+        ? Math.max(0, currentPhaseEndSec - nowSec)
+        : 0;
+    const currentPhaseProgress = currentPhaseDurationSec > 0
+        ? Math.max(0, Math.min(100, Math.round((currentPhaseElapsedSec / currentPhaseDurationSec) * 100)))
+        : 0;
+
+    return {
+        currentPhaseStartSec,
+        currentPhaseEndSec,
+        currentPhaseDurationSec,
+        currentPhaseRemainingSec,
+        currentPhaseElapsedSec,
+        currentPhaseProgress,
+    };
 }
 
 // ============ 内部状态 ============
@@ -1289,8 +1349,7 @@ function isOccupiedSlaveLand(land, landsMap) {
 }
 
 function getPlantSizeBySeedId(seedId) {
-    const plantCfg = getPlantBySeedId(toNum(seedId));
-    return Math.max(1, toNum(plantCfg && plantCfg.size) || 1);
+    return Math.max(1, toNum(getSeedPlantSize(toNum(seedId))) || 1);
 }
 
 /**
@@ -1704,6 +1763,8 @@ async function getLandsDetail() {
                 : null;
             const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
             const matureInSec = matureBegin > nowSec ? (matureBegin - nowSec) : 0;
+            const totalGrowTime = resolveTotalGrowTimeSec(plant, matureBegin, plantCfg);
+            const phaseProgressMeta = resolvePhaseProgressMeta(plant.phases, currentPhase, nowSec);
 
             let landStatus = 'growing';
             if (phaseVal === PlantPhase.MATURE) landStatus = 'harvestable';
@@ -1724,6 +1785,13 @@ async function getLandsDetail() {
                 currentSeason,
                 totalSeason,
                 matureInSec,
+                totalGrowTime,
+                currentPhaseStartSec: phaseProgressMeta.currentPhaseStartSec,
+                currentPhaseEndSec: phaseProgressMeta.currentPhaseEndSec,
+                currentPhaseDurationSec: phaseProgressMeta.currentPhaseDurationSec,
+                currentPhaseRemainingSec: phaseProgressMeta.currentPhaseRemainingSec,
+                currentPhaseElapsedSec: phaseProgressMeta.currentPhaseElapsedSec,
+                currentPhaseProgress: phaseProgressMeta.currentPhaseProgress,
                 needWater,
                 needWeed,
                 needBug,
@@ -2668,6 +2736,38 @@ async function runFarmOperation(opType) {
     return { hadWork: actions.length > 0, actions };
 }
 
+async function runSingleLandOperation(opType, landId) {
+    const id = toNum(landId);
+    if (id <= 0) {
+        throw new Error('缺少有效土地编号');
+    }
+    const normalizedOpType = String(opType || '').trim().toLowerCase();
+    if (!normalizedOpType) {
+        throw new Error('缺少操作类型');
+    }
+
+    switch (normalizedOpType) {
+        case 'harvest':
+            await harvest([id]);
+            recordOperation('harvest', 1);
+            return { ok: true, opType: normalizedOpType, landId: id };
+        case 'water':
+            await waterLand([id]);
+            recordOperation('water', 1);
+            return { ok: true, opType: normalizedOpType, landId: id };
+        case 'weed':
+            await weedOut([id]);
+            recordOperation('weed', 1);
+            return { ok: true, opType: normalizedOpType, landId: id };
+        case 'bug':
+            await insecticide([id]);
+            recordOperation('bug', 1);
+            return { ok: true, opType: normalizedOpType, landId: id };
+        default:
+            throw new Error(`暂不支持单地块操作: ${normalizedOpType}`);
+    }
+}
+
 function scheduleNextFarmCheck(delayMs = CONFIG.farmCheckInterval) {
     if (externalSchedulerMode) return;
     if (!farmLoopRunning) return;
@@ -2765,6 +2865,7 @@ module.exports = {
     getLandsDetail,
     getAvailableSeeds,
     runFarmOperation, // 导出新函数
+    runSingleLandOperation,
     runFertilizerByConfig,
     __test__: {
         normalizeBagSeedPriorityList,

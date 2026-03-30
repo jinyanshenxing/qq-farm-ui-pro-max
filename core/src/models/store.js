@@ -105,8 +105,9 @@ const DEFAULT_MODE_SCOPE = {
     requiresGameFriend: true,
     fallbackBehavior: 'standalone',
 };
+const QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES = 0;
 const QQ_HIGH_RISK_WINDOW_MIN_MINUTES = 5;
-const QQ_HIGH_RISK_WINDOW_MAX_MINUTES = 180;
+const QQ_HIGH_RISK_WINDOW_MAX_MINUTES = 43200;
 const DEFAULT_QQ_HIGH_RISK_WINDOW = {
     durationMinutes: 30,
     expiresAt: 0,
@@ -449,6 +450,17 @@ function normalizeTradeKeepFruitIds(list, fallbackList = []) {
     ));
 }
 
+function normalizeQqHighRiskWindowDuration(rawDuration, fallbackDuration = DEFAULT_QQ_HIGH_RISK_WINDOW.durationMinutes) {
+    const parsed = Number.parseInt(rawDuration, 10);
+    const fallbackParsed = Number.parseInt(fallbackDuration, 10);
+    const next = Number.isFinite(parsed) ? parsed : fallbackParsed;
+    const base = Number.isFinite(next) ? next : DEFAULT_QQ_HIGH_RISK_WINDOW.durationMinutes;
+    if (base === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES) {
+        return QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES;
+    }
+    return Math.max(QQ_HIGH_RISK_WINDOW_MIN_MINUTES, Math.min(QQ_HIGH_RISK_WINDOW_MAX_MINUTES, base));
+}
+
 function normalizeReportConfig(rawConfig, fallbackConfig = DEFAULT_REPORT_CONFIG) {
     const raw = (rawConfig && typeof rawConfig === 'object') ? rawConfig : {};
     const fallback = (fallbackConfig && typeof fallbackConfig === 'object') ? fallbackConfig : DEFAULT_REPORT_CONFIG;
@@ -740,11 +752,9 @@ function normalizeQqHighRiskWindow(rawWindow, fallbackWindow = DEFAULT_QQ_HIGH_R
     const fallback = (fallbackWindow && typeof fallbackWindow === 'object')
         ? fallbackWindow
         : DEFAULT_QQ_HIGH_RISK_WINDOW;
-    const durationMinutes = clampInteger(
+    const durationMinutes = normalizeQqHighRiskWindowDuration(
         raw.durationMinutes,
         fallback.durationMinutes,
-        QQ_HIGH_RISK_WINDOW_MIN_MINUTES,
-        QQ_HIGH_RISK_WINDOW_MAX_MINUTES,
     );
     return {
         durationMinutes,
@@ -814,6 +824,7 @@ function finalizeQqHighRiskWindow(accountId, current, next) {
     const currentState = getQqHighRiskState(current);
     const nextState = getQqHighRiskState(next);
     const hasAnyEnabled = Object.values(nextState).some(Boolean);
+    const durationChanged = requestedWindow.durationMinutes !== currentWindow.durationMinutes;
 
     if (!hasAnyEnabled) {
         next.qqHighRiskWindow.expiresAt = 0;
@@ -821,10 +832,12 @@ function finalizeQqHighRiskWindow(accountId, current, next) {
     }
 
     const hasNewEnable = Object.keys(nextState).some((key) => !currentState[key] && nextState[key]);
-    if (hasNewEnable) {
+    if (hasNewEnable || durationChanged) {
         const now = Date.now();
         next.qqHighRiskWindow.lastIssuedAt = now;
-        next.qqHighRiskWindow.expiresAt = now + (next.qqHighRiskWindow.durationMinutes * 60 * 1000);
+        next.qqHighRiskWindow.expiresAt = next.qqHighRiskWindow.durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES
+            ? 0
+            : now + (next.qqHighRiskWindow.durationMinutes * 60 * 1000);
         return next;
     }
 
@@ -850,6 +863,13 @@ function enforceQqHighRiskWindow(accountId, snapshot, options = {}) {
 
     const hasAnyEnabled = hasQqHighRiskEnabled(cfg);
     if (!hasAnyEnabled) {
+        if (cfg.qqHighRiskWindow.expiresAt > 0) {
+            cfg.qqHighRiskWindow.expiresAt = 0;
+        }
+        return cfg;
+    }
+
+    if (cfg.qqHighRiskWindow.durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES) {
         if (cfg.qqHighRiskWindow.expiresAt > 0) {
             cfg.qqHighRiskWindow.expiresAt = 0;
         }

@@ -295,7 +295,14 @@ const STAKEOUT_STEAL_SCHEMA = {
 };
 
 const QQ_HIGH_RISK_WINDOW_SCHEMA = {
-    durationMinutes: { type: 'integer', min: 5, max: 180, default: 30, label: 'QQ 高风险自动回退时长(分钟)' },
+    durationMinutes: {
+        type: 'integer',
+        min: 0,
+        max: 43200,
+        custom: value => value === 0 || value >= 5,
+        default: 30,
+        label: 'QQ 高风险自动回退时长(分钟)',
+    },
     expiresAt: { type: 'integer', min: 0, default: 0, label: 'QQ 高风险窗口到期时间' },
     lastIssuedAt: { type: 'integer', min: 0, default: 0, label: 'QQ 高风险窗口签发时间' },
     lastAutoDisabledAt: { type: 'integer', min: 0, default: 0, label: 'QQ 高风险窗口自动回退时间' },

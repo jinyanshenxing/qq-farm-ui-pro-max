@@ -4,6 +4,11 @@ import api from '@/api'
 import { localizeRuntimeText } from '@/utils/runtime-text'
 import { createDefaultTradeConfig, normalizeTradeConfig } from '@/utils/trade-config'
 
+const QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES = 0
+const QQ_HIGH_RISK_WINDOW_MIN_MINUTES = 5
+const QQ_HIGH_RISK_WINDOW_MAX_MINUTES = 43200
+const QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES = 30
+
 export interface AutomationConfig {
   farm?: boolean
   farm_push?: boolean
@@ -99,6 +104,16 @@ function resolveLocalizedError(...values: any[]) {
       return localizeRuntimeText(text)
   }
   return '操作失败'
+}
+
+function normalizeQqHighRiskWindowDuration(rawDuration: any, fallbackDuration = QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES) {
+  const parsed = Number.parseInt(String(rawDuration ?? ''), 10)
+  const fallbackParsed = Number.parseInt(String(fallbackDuration ?? QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES), 10)
+  const next = Number.isFinite(parsed) ? parsed : fallbackParsed
+  const base = Number.isFinite(next) ? next : QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES
+  if (base === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES
+  return Math.max(QQ_HIGH_RISK_WINDOW_MIN_MINUTES, Math.min(QQ_HIGH_RISK_WINDOW_MAX_MINUTES, base))
 }
 
 export interface TradeSellConfig {
@@ -1040,7 +1055,7 @@ export const useSettingStore = defineStore('setting', () => {
         friendQuietHours: newSettings.friendQuietHours,
         stakeoutSteal: newSettings.stakeoutSteal,
         qqHighRiskWindow: {
-          durationMinutes: Math.max(5, Math.min(180, Number.parseInt(String(newSettings.qqHighRiskWindow?.durationMinutes ?? 30), 10) || 30)),
+          durationMinutes: normalizeQqHighRiskWindowDuration(newSettings.qqHighRiskWindow?.durationMinutes),
         },
         friendRiskConfig: newSettings.friendRiskConfig,
         specialCareFriendIds: Array.isArray(newSettings.specialCareFriendIds)

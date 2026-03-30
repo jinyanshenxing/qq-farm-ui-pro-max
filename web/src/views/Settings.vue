@@ -34,6 +34,10 @@ const REPORT_HISTORY_VIEW_STORAGE_KEY = 'qq-farm-bot:report-history-view:v1'
 const REPORT_HISTORY_BROWSER_PREF_NOTE = '这里的筛选类型、筛选结果、关键字和排序方式会跟随当前登录用户同步到服务器；列表固定每页 3 条，超过后自动翻页。汇报记录本身仍来自数据库。'
 const QQ_HIGH_RISK_CONFIRM_PHRASE = '我已知晓风险'
 const QQ_HIGH_RISK_AUTO_DISABLE_SEEN_KEY_PREFIX = 'qq-farm-bot:qq-high-risk-auto-disable-seen:'
+const QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES = 0
+const QQ_HIGH_RISK_WINDOW_MIN_MINUTES = 5
+const QQ_HIGH_RISK_WINDOW_MAX_MINUTES = 43200
+const QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES = 30
 const SETTINGS_CATEGORY_QUERY_KEY = 'category'
 const ADVANCED_SECTION_QUERY_KEY = 'advancedSection'
 const UPDATE_TAB_QUERY_KEY = 'updateTab'
@@ -3503,15 +3507,74 @@ const qqHighRiskEnabledLabels = computed(() => {
   return enabled
 })
 
+function normalizeQqHighRiskDuration(rawDuration: any, fallbackDuration = QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES) {
+  const parsed = Number.parseInt(String(rawDuration ?? ''), 10)
+  const fallbackParsed = Number.parseInt(String(fallbackDuration ?? QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES), 10)
+  const next = Number.isFinite(parsed) ? parsed : fallbackParsed
+  const base = Number.isFinite(next) ? next : QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES
+  if (base === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES
+  return Math.max(QQ_HIGH_RISK_WINDOW_MIN_MINUTES, Math.min(QQ_HIGH_RISK_WINDOW_MAX_MINUTES, base))
+}
+
+function formatQqHighRiskWindowDuration(minutes: number) {
+  const total = Math.max(0, Number(minutes || 0))
+  if (total === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return '不限制'
+  if (total < 60)
+    return `${total} 分钟`
+
+  const days = Math.floor(total / (24 * 60))
+  const hours = Math.floor((total % (24 * 60)) / 60)
+  const remainMinutes = total % 60
+  const parts: string[] = []
+
+  if (days > 0)
+    parts.push(`${days} 天`)
+  if (hours > 0)
+    parts.push(`${hours} 小时`)
+  if (remainMinutes > 0 && days === 0)
+    parts.push(`${remainMinutes} 分钟`)
+
+  return parts.length > 0 ? parts.join(' ') : `${total} 分钟`
+}
+
 function buildNormalizedQqHighRiskWindow(rawWindow: any) {
-  const durationMinutes = Math.max(5, Math.min(180, Number.parseInt(String(rawWindow?.durationMinutes ?? 30), 10) || 30))
+  const durationMinutes = normalizeQqHighRiskDuration(rawWindow?.durationMinutes)
+  const expiresAt = durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES
+    ? 0
+    : Math.max(0, Number.parseInt(String(rawWindow?.expiresAt ?? 0), 10) || 0)
   return {
     durationMinutes,
-    expiresAt: Math.max(0, Number.parseInt(String(rawWindow?.expiresAt ?? 0), 10) || 0),
+    expiresAt,
     lastIssuedAt: Math.max(0, Number.parseInt(String(rawWindow?.lastIssuedAt ?? 0), 10) || 0),
     lastAutoDisabledAt: Math.max(0, Number.parseInt(String(rawWindow?.lastAutoDisabledAt ?? 0), 10) || 0),
   }
 }
+
+const qqHighRiskLastFiniteDuration = ref(QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES)
+const qqHighRiskWindowUnlimited = computed(() => buildNormalizedQqHighRiskWindow(localSettings.value?.qqHighRiskWindow).durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+const qqHighRiskDraftDuration = computed(() => buildNormalizedQqHighRiskWindow(localSettings.value?.qqHighRiskWindow).durationMinutes)
+const qqHighRiskWindowBadgeText = computed(() => qqHighRiskWindowUnlimited.value ? '不自动回退' : `最长 ${formatQqHighRiskWindowDuration(QQ_HIGH_RISK_WINDOW_MAX_MINUTES)}`)
+const qqHighRiskWindowHintText = computed(() => qqHighRiskWindowUnlimited.value
+  ? '保存后不会自动关闭这 4 项，请只在你愿意手动收口时使用。'
+  : `支持 5 分钟到 ${formatQqHighRiskWindowDuration(QQ_HIGH_RISK_WINDOW_MAX_MINUTES)}，超过 180 分钟的设置现在也会正常生效。`)
+const qqHighRiskDraftSummaryText = computed(() => qqHighRiskWindowUnlimited.value
+  ? '当前拟保存模式：不自动回退，需手动关闭'
+  : `当前拟保存时长：${formatQqHighRiskWindowDuration(qqHighRiskDraftDuration.value)}`)
+const qqHighRiskDurationPresets = [
+  { label: '30 分钟', minutes: 30 },
+  { label: '3 小时', minutes: 180 },
+  { label: '12 小时', minutes: 720 },
+  { label: '24 小时', minutes: 1440 },
+  { label: '7 天', minutes: 10080 },
+]
+const qqHighRiskConfirmWindowText = computed(() => {
+  const windowState = buildNormalizedQqHighRiskWindow(localSettings.value?.qqHighRiskWindow)
+  if (windowState.durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return '检测到你正在为 QQ 账号新开启以下高风险自动化功能，继续保存会明显提高腾讯侧风控命中概率。此次保存将切到不限制模式，后端不会再自动关闭这些开关：'
+  return `检测到你正在为 QQ 账号新开启以下高风险自动化功能，继续保存会明显提高腾讯侧风控命中概率。此次保存会签发 ${formatQqHighRiskWindowDuration(windowState.durationMinutes)} 的临时窗口，到期后后端会自动关闭这些开关：`
+})
 
 function formatQqHighRiskDateTime(value: any) {
   const timestamp = Math.max(0, Number(value) || 0)
@@ -3591,12 +3654,52 @@ const qqHighRiskWindowStatusText = computed(() => {
   const hasEnabledItems = qqHighRiskEnabledLabels.value.length > 0
   if (qqHighRiskRemainingMs.value > 0)
     return `当前临时窗口截止 ${formatQqHighRiskDateTime(windowState.expiresAt)}，剩余 ${qqHighRiskRemainingText.value}，到期后后端会自动关闭这 4 项。`
+  if (hasEnabledItems && windowState.durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return '当前高风险项已开启，当前为不限制模式；后端不会自动关闭这 4 项，请在使用完后手动关闭。'
   if (hasEnabledItems)
     return `当前高风险项已开启，但没有有效临时窗口；后端会在下一次读取配置时自动回退为关闭。`
   if (windowState.lastAutoDisabledAt > 0)
     return `当前没有高风险项开启。最近一次自动回退时间：${formatQqHighRiskDateTime(windowState.lastAutoDisabledAt)}。`
-  return `当前没有高风险项开启。新开启高风险项后，会获得 ${windowState.durationMinutes} 分钟的临时窗口。`
+  if (windowState.durationMinutes === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+    return '当前没有高风险项开启。新开启高风险项后，将保持开启直到你手动关闭。'
+  return `当前没有高风险项开启。新开启高风险项后，会获得 ${formatQqHighRiskWindowDuration(windowState.durationMinutes)} 的临时窗口。`
 })
+
+function toggleQqHighRiskWindowUnlimited() {
+  if (!localSettings.value.qqHighRiskWindow) {
+    localSettings.value.qqHighRiskWindow = {
+      durationMinutes: QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES,
+      expiresAt: 0,
+      lastIssuedAt: 0,
+      lastAutoDisabledAt: 0,
+    }
+  }
+
+  const currentDuration = buildNormalizedQqHighRiskWindow(localSettings.value.qqHighRiskWindow).durationMinutes
+  if (currentDuration === QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES) {
+    localSettings.value.qqHighRiskWindow.durationMinutes = qqHighRiskLastFiniteDuration.value
+    localSettings.value.qqHighRiskWindow.expiresAt = 0
+    return
+  }
+
+  qqHighRiskLastFiniteDuration.value = currentDuration
+  localSettings.value.qqHighRiskWindow.durationMinutes = QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES
+  localSettings.value.qqHighRiskWindow.expiresAt = 0
+}
+
+function applyQqHighRiskWindowPreset(minutes: number) {
+  if (!localSettings.value.qqHighRiskWindow) {
+    localSettings.value.qqHighRiskWindow = {
+      durationMinutes: QQ_HIGH_RISK_WINDOW_DEFAULT_MINUTES,
+      expiresAt: 0,
+      lastIssuedAt: 0,
+      lastAutoDisabledAt: 0,
+    }
+  }
+
+  qqHighRiskLastFiniteDuration.value = minutes
+  localSettings.value.qqHighRiskWindow.durationMinutes = minutes
+}
 
 function buildNormalizedModeScope(rawScope: any) {
   return {
@@ -4517,6 +4620,15 @@ watch(() => currentAccountId.value, () => {
 })
 
 watch(
+  () => buildNormalizedQqHighRiskWindow(localSettings.value?.qqHighRiskWindow).durationMinutes,
+  (durationMinutes) => {
+    if (durationMinutes > QQ_HIGH_RISK_WINDOW_UNLIMITED_MINUTES)
+      qqHighRiskLastFiniteDuration.value = durationMinutes
+  },
+  { immediate: true },
+)
+
+watch(
   () => [
     currentAccountId.value,
     isCurrentAccountQq.value,
@@ -5219,7 +5331,7 @@ function formatDiffValue(path: string, value: any) {
   if (path.startsWith('intervals.') || path.startsWith('harvestDelay.') || path === 'stakeoutSteal.delaySec')
     return `${value} 秒`
   if (path === 'qqHighRiskWindow.durationMinutes')
-    return `${value} 分钟`
+    return formatQqHighRiskWindowDuration(Number(value) || 0)
   if (path === 'automation.fertilizer_buy_limit')
     return `${value} 袋`
   if (path === 'automation.fertilizer_buy_threshold_normal' || path === 'automation.fertilizer_buy_threshold_organic')
@@ -6996,17 +7108,71 @@ async function restoreTimingDefaults() {
                       <span class="settings-risk-item">精准蹲守偷菜</span>
                       <span class="settings-risk-item">QQ 多链路好友拉取</span>
                     </div>
-                    <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,180px)_1fr]">
-                      <BaseInput
-                        v-model.number="localSettings.qqHighRiskWindow.durationMinutes"
-                        label="自动回退时长 (分钟)"
-                        type="number"
-                        min="5"
-                        max="180"
-                      />
+                    <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,260px)_1fr]">
+                      <div class="space-y-2">
+                        <div class="settings-qq-risk-toolbar rounded-xl p-3">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div class="settings-qq-risk-toolbar__title text-[11px] font-semibold tracking-[0.18em] uppercase">
+                                快捷时长
+                              </div>
+                              <div class="settings-qq-risk-toolbar__summary mt-1 text-xs font-medium">
+                                {{ qqHighRiskDraftSummaryText }}
+                              </div>
+                            </div>
+                            <BaseBadge surface="meta" :tone="qqHighRiskWindowUnlimited ? 'danger' : 'warning'">
+                              {{ qqHighRiskWindowBadgeText }}
+                            </BaseBadge>
+                          </div>
+                          <div class="mt-3 flex flex-wrap gap-2">
+                            <BaseButton
+                              v-for="preset in qqHighRiskDurationPresets"
+                              :key="`qq-high-risk-preset-${preset.minutes}`"
+                              size="sm"
+                              :variant="qqHighRiskDraftDuration === preset.minutes ? 'danger' : 'outline'"
+                              class="settings-qq-risk-preset"
+                              @click="applyQqHighRiskWindowPreset(preset.minutes)"
+                            >
+                              {{ preset.label }}
+                            </BaseButton>
+                          </div>
+                        </div>
+                        <div class="flex items-end gap-2">
+                          <BaseInput
+                            v-if="!qqHighRiskWindowUnlimited"
+                            v-model.number="localSettings.qqHighRiskWindow.durationMinutes"
+                            class="min-w-0 flex-1"
+                            label="自动回退时长 (分钟)"
+                            type="number"
+                            min="5"
+                            :max="QQ_HIGH_RISK_WINDOW_MAX_MINUTES"
+                          />
+                          <div v-else class="min-w-0 flex-1">
+                            <div class="glass-text-muted mb-1.5 text-sm font-medium">
+                              自动回退时长 (分钟)
+                            </div>
+                            <div class="settings-qq-risk-window-pill min-h-[var(--ui-control-height)] flex items-center rounded-lg px-3 text-sm font-medium">
+                              不限制
+                            </div>
+                          </div>
+                          <BaseButton
+                            class="shrink-0"
+                            size="md"
+                            :variant="qqHighRiskWindowUnlimited ? 'danger' : 'outline'"
+                            @click="toggleQqHighRiskWindowUnlimited"
+                          >
+                            {{ qqHighRiskWindowUnlimited ? '恢复时限' : '不限制' }}
+                          </BaseButton>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 text-[11px] leading-relaxed">
+                          <span class="glass-text-muted">
+                            {{ qqHighRiskWindowHintText }}
+                          </span>
+                        </div>
+                      </div>
                       <div class="settings-system-warning-alert rounded-xl p-3 text-xs leading-relaxed">
                         <p>
-                          保存时如果你新开启了任一高风险项，后端只会签发一个临时窗口。窗口到期后，即使设置页没有打开，也会自动把这 4 项回退为关闭。
+                          保存时如果你新开启了高风险项，或调整了已开启项目的回退时长，后端都会立即更新这组保护窗口。窗口到期后，即使设置页没有打开，也会自动把这 4 项回退为关闭。
                         </p>
                         <p class="mt-2 font-medium">
                           当前窗口状态：{{ qqHighRiskWindowStatusText }}
@@ -12027,7 +12193,7 @@ async function restoreTimingDefaults() {
       >
         <div class="text-left space-y-4">
           <p class="glass-text-muted text-sm leading-relaxed">
-            检测到你正在为 QQ 账号新开启以下高风险自动化功能，继续保存会明显提高腾讯侧风控命中概率。此次保存只会签发 {{ buildNormalizedQqHighRiskWindow(localSettings.qqHighRiskWindow).durationMinutes }} 分钟的临时窗口，到期后后端会自动关闭这些开关：
+            {{ qqHighRiskConfirmWindowText }}
           </p>
           <div class="settings-system-diff-panel max-h-60 overflow-y-auto rounded-xl p-2">
             <div v-for="item in qqHighRiskModalItems" :key="item.label" class="settings-system-diff-row p-2 text-xs">
@@ -13805,5 +13971,32 @@ async function restoreTimingDefaults() {
   top: -5.5rem;
   height: 0;
   pointer-events: none;
+}
+
+.settings-qq-risk-window-pill {
+  border: 1px solid var(--ui-border-subtle);
+  background: color-mix(in srgb, var(--ui-bg-surface-raised) 82%, var(--ui-status-danger-soft) 18%);
+  color: var(--ui-text-1);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+
+.settings-qq-risk-toolbar {
+  border: 1px solid color-mix(in srgb, var(--ui-status-warning) 18%, var(--ui-border-subtle));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-status-warning-soft) 44%, transparent), transparent 58%),
+    color-mix(in srgb, var(--ui-bg-surface-raised) 88%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+}
+
+.settings-qq-risk-toolbar__title {
+  color: color-mix(in srgb, var(--ui-status-warning) 82%, var(--ui-text-2));
+}
+
+.settings-qq-risk-toolbar__summary {
+  color: var(--ui-text-1);
+}
+
+.settings-qq-risk-preset {
+  min-width: 4.75rem;
 }
 </style>

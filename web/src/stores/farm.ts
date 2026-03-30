@@ -9,6 +9,13 @@ export interface Land {
   seedImage?: string
   status: string
   matureInSec: number
+  totalGrowTime?: number
+  currentPhaseStartSec?: number
+  currentPhaseEndSec?: number
+  currentPhaseDurationSec?: number
+  currentPhaseRemainingSec?: number
+  currentPhaseElapsedSec?: number
+  currentPhaseProgress?: number
   needWater?: boolean
   needWeed?: boolean
   needBug?: boolean
@@ -21,6 +28,7 @@ export const useFarmStore = defineStore('farm', () => {
   const bagSeeds = ref<any[]>([])
   const summary = ref<any>({})
   const loading = ref(false)
+  const operatingLandIds = ref<number[]>([])
 
   async function fetchLands(accountId: string) {
     if (!accountId)
@@ -79,5 +87,30 @@ export const useFarmStore = defineStore('farm', () => {
     await fetchLands(accountId)
   }
 
-  return { lands, summary, seeds, bagSeeds, loading, fetchLands, fetchSeeds, fetchPlantableBagSeeds, operate }
+  async function operateLand(accountId: string, landId: number, opType: string, options: { refresh?: boolean } = {}) {
+    if (!accountId || !landId)
+      return
+    operatingLandIds.value = [...new Set([...operatingLandIds.value, landId])]
+    try {
+      await api.post('/api/farm/land/operate', { opType, landId }, {
+        headers: { 'x-account-id': accountId },
+      })
+      if (options.refresh !== false)
+        await fetchLands(accountId)
+    }
+    finally {
+      operatingLandIds.value = operatingLandIds.value.filter(id => id !== landId)
+    }
+  }
+
+  async function operateLands(accountId: string, landIds: number[], opType: string) {
+    const normalizedIds = Array.from(new Set((landIds || []).map(id => Number(id || 0)).filter(id => id > 0)))
+    if (!accountId || normalizedIds.length === 0)
+      return
+    for (const landId of normalizedIds)
+      await operateLand(accountId, landId, opType, { refresh: false })
+    await fetchLands(accountId)
+  }
+
+  return { lands, summary, seeds, bagSeeds, loading, operatingLandIds, fetchLands, fetchSeeds, fetchPlantableBagSeeds, operate, operateLand, operateLands }
 })

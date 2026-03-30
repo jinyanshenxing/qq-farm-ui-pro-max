@@ -152,7 +152,7 @@ const summaryChips = computed(() => [
                 地块
               </div>
               <div class="ui-mobile-record-value">
-                #{{ Number(log?.meta?.landId || 0) || '-' }}
+                {{ Number(log?.meta?.landId || 0) > 0 ? `${Number(log?.meta?.landId || 0)}号土地` : '-' }}
               </div>
             </div>
             <div v-if="Number(log?.meta?.gid || 0) > 0" class="ui-mobile-record-field">

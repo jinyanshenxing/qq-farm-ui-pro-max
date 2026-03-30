@@ -494,7 +494,7 @@ function buildSystemLogSummary(record: any, meta: any) {
         : 'QQ 高风险临时窗口到期后，系统已自动关闭相关高风险项。',
       metrics: [
         { key: 'count', label: '关闭项数', value: `${labels.length || 0} 项` },
-        { key: 'duration', label: '授权时长', value: formatMinutesLabel(durationMinutes) },
+        { key: 'duration', label: '授权时长', value: durationMinutes > 0 ? formatMinutesLabel(durationMinutes) : '不限制' },
         { key: 'disabledAt', label: '回退时间', value: formatTimestampLabel(meta?.autoDisabledAt) },
       ],
     }

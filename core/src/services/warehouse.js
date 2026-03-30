@@ -4,7 +4,7 @@
  */
 
 const protobuf = require('protobufjs');
-const { getFruitName, getPlantByFruitId, getPlantBySeedId, getPlantNameBySeedId, getSeedImageBySeedId, getItemById, getItemImageById } = require('../config/gameConfig');
+const { getFruitName, getPlantByFruitId, getPlantBySeedId, getPlantNameBySeedId, getSeedImageBySeedId, getItemById, getItemImageById, getSeedPlantSize } = require('../config/gameConfig');
 const { isAutomationOn, getTradeConfig, getConfigSnapshot } = require('../models/store');
 const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
@@ -32,6 +32,7 @@ const ORGANIC_FERTILIZER_ITEM_HOURS = new Map([
 let fertilizerGiftDoneDateKey = '';
 let fertilizerGiftLastOpenAt = 0;
 const plantableSeedSnapshotPersistState = new Map();
+const unknownBagItemIdsLogged = new Set();
 
 function getDateKey() {
     const now = new Date();
@@ -216,6 +217,76 @@ function buildBagItemMeta(id) {
         maxCount: info ? (Number(info.max_count) || 0) : 0,
         maxOwn: info ? (Number(info.max_own) || 0) : 0,
     };
+}
+
+function buildUnknownBagItemDebugContext(rawItems, targetIndex) {
+    const items = Array.isArray(rawItems) ? rawItems : [];
+    const index = Number(targetIndex);
+    if (index < 0 || index >= items.length) {
+        return { targetIndex: -1, neighbors: [], unknownIdsInBatch: [] };
+    }
+
+    const begin = Math.max(0, index - 2);
+    const end = Math.min(items.length, index + 3);
+    const neighbors = items.slice(begin, end).map((entry, offset) => ({
+        index: begin + offset,
+        id: Math.max(0, toNum(entry && entry.id)),
+        count: Math.max(0, toNum(entry && entry.count)),
+        uid: Math.max(0, toNum(entry && entry.uid)),
+        knownAs: (() => {
+            const entryId = Math.max(0, toNum(entry && entry.id));
+            if (!entryId) return '';
+            const info = getItemById(entryId);
+            if (info && info.name) return String(info.name);
+            if (getPlantBySeedId(entryId)) return `${getPlantNameBySeedId(entryId)}种子`;
+            if (getPlantByFruitId(entryId)) return `${getFruitName(entryId)}果实`;
+            if (entryId === 1 || entryId === 1001) return '金币';
+            if (entryId === 1101) return '经验';
+            return '';
+        })(),
+    }));
+
+    const unknownIdsInBatch = Array.from(new Set(items
+        .map(entry => Math.max(0, toNum(entry && entry.id)))
+        .filter((entryId) => {
+            if (entryId <= 0 || entryId === 1 || entryId === 1001 || entryId === 1101) return false;
+            return !getItemById(entryId) && !getPlantBySeedId(entryId) && !getPlantByFruitId(entryId);
+        })));
+
+    return {
+        targetIndex: index,
+        neighbors,
+        unknownIdsInBatch,
+    };
+}
+
+function logUnknownBagItemIfNeeded(id, item, meta, options = {}) {
+    const normalizedId = Number(id) || 0;
+    if (normalizedId <= 0 || unknownBagItemIdsLogged.has(normalizedId)) {
+        return;
+    }
+
+    const category = String(meta && meta.category || '');
+    const hasKnownConfig = !!getItemById(normalizedId) || !!getPlantByFruitId(normalizedId) || !!getPlantBySeedId(normalizedId);
+    if (hasKnownConfig || category === 'gold' || category === 'exp') {
+        return;
+    }
+
+    unknownBagItemIdsLogged.add(normalizedId);
+    const debugContext = buildUnknownBagItemDebugContext(options.rawItems, options.rawIndex);
+    logWarn('仓库', `检测到未收录的背包物品 ID=${normalizedId}，当前将回退为占位图显示，请补充 ItemInfo/图标素材。`, {
+        module: 'warehouse',
+        event: 'unknown_bag_item_detected',
+        accountId: getRuntimeAccountId(),
+        itemId: normalizedId,
+        count: Math.max(0, toNum(item && item.count)),
+        uid: Math.max(0, toNum(item && item.uid)),
+        fallbackName: String(meta && meta.name || ''),
+        fallbackImage: String(meta && meta.image || ''),
+        rawIndex: debugContext.targetIndex,
+        neighborItems: debugContext.neighbors,
+        unknownIdsInBatch: debugContext.unknownIdsInBatch,
+    });
 }
 
 function isFertilizerRelatedItemId(itemId) {
@@ -445,12 +516,17 @@ async function getBagDetail() {
     const rawItems = getBagItems(bagReply);
     const originalItems = [];
     const merged = new Map();
-    for (const it of (rawItems || [])) {
+    for (let index = 0; index < (rawItems || []).length; index += 1) {
+        const it = rawItems[index];
         const id = toNum(it.id);
         const count = toNum(it.count);
         const uid = toNum(it.uid);
         if (id <= 0 || count <= 0) continue;
         const meta = buildBagItemMeta(id);
+        logUnknownBagItemIfNeeded(id, it, meta, {
+            rawItems,
+            rawIndex: index,
+        });
 
         originalItems.push({
             id,
@@ -538,10 +614,10 @@ async function getPlantableBagSeeds(options = {}) {
         if (!plantCfg) continue;
 
         const requiredLevel = Math.max(0, toNum(plantCfg.land_level_need));
-        const plantSize = Math.max(1, toNum(plantCfg.size) || 1);
+        const plantSize = Math.max(1, toNum(getSeedPlantSize(seedId)) || 1);
         const reservedCount = Math.max(0, getSeedReserveCount(inventoryPlanting, seedId));
         const usableCount = Math.max(0, count - reservedCount);
-        const unlocked = requiredLevel <= accountLevel;
+        const unlocked = true;
 
         allSeeds.push({
             seedId,
@@ -553,6 +629,7 @@ async function getPlantableBagSeeds(options = {}) {
             plantSize,
             image: String(item && item.image) || getSeedImageBySeedId(seedId) || '',
             unlocked,
+            accountLevel,
         });
 
         if (!includeLocked && !unlocked) continue;

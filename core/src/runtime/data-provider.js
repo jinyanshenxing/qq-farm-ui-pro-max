@@ -313,6 +313,7 @@ function createDataProvider(options) {
         },
 
         doFarmOp: async (accountRef, opType) => callWorkerApi(await resolveAccountRefId(accountRef), 'doFarmOp', opType),
+        doFarmLandOp: async (accountRef, opType, landId) => callWorkerApi(await resolveAccountRefId(accountRef), 'doFarmLandOp', opType, landId),
         doAnalytics: async (accountRef, sortBy) => callWorkerApi(await resolveAccountRefId(accountRef), 'getAnalytics', sortBy),
         saveSettings: async (accountRef, payload) => {
             const accountId = await resolveAccountRefId(accountRef);

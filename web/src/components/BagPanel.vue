@@ -3140,7 +3140,7 @@ useIntervalFn(loadBag, 60000)
                       @click="toggleSelectedLand(Number(land.id || 0))"
                     >
                       <div class="detail-land-card__head">
-                        <span class="detail-land-card__id">#{{ land.id }}</span>
+                        <span class="detail-land-card__id">{{ Number(land.id || 0) > 0 ? `${Number(land.id || 0)}号土地` : '-' }}</span>
                         <span class="detail-land-card__status">{{ normalizeLandStatusLabel(land) }}</span>
                       </div>
                       <div class="detail-land-card__name">

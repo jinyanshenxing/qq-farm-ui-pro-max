@@ -26,6 +26,9 @@ const seedImageMap = new Map(); // seed_id -> image url
 const seedAssetImageMap = new Map(); // asset_name (Crop_xxx) -> image url
 const itemImageMap = new Map(); // item_id -> image url
 const itemIconKeyImageMap = new Map(); // normalized icon/asset key -> image url
+const missingSeedPlantSizeOverrides = new Map([
+    [20046, 2], // 爱心果在当前 Plant.json 缺失，但实际为 2x2 作物
+]);
 
 const IMAGE_EXT_RE = /\.(?:png|jpe?g|webp|gif|svg)$/i;
 const verboseLoadLogsEnabled = String(process.env.FARM_VERBOSE_GAME_CONFIG_LOADS || '') === '1';
@@ -520,6 +523,7 @@ function getAllSeeds() {
                 requiredLevel: Number((plant && plant.land_level_need) || (item && item.level) || 0),
                 price: getSeedPrice(seedId),
                 image: getSeedImageBySeedId(seedId),
+                plantSize: getSeedPlantSize(seedId),
             };
         })
         .sort((a, b) => {
@@ -636,6 +640,24 @@ function deriveSeedIdFromPlantId(plantId) {
     return 0;
 }
 
+function getSeedPlantSize(seedId) {
+    ensureConfigsLoaded();
+    const numericSeedId = Number(seedId) || 0;
+    if (numericSeedId <= 0) return 1;
+
+    const plant = seedToPlant.get(numericSeedId);
+    if (plant) {
+        return Math.max(1, Number(plant.size) || 1);
+    }
+
+    const overrideSize = missingSeedPlantSizeOverrides.get(numericSeedId);
+    if (overrideSize) {
+        return Math.max(1, Number(overrideSize) || 1);
+    }
+
+    return 1;
+}
+
 function buildFallbackPlantConfig(seedId, plantId = 0) {
     const numericSeedId = Number(seedId) || 0;
     if (numericSeedId <= 0) return null;
@@ -651,7 +673,7 @@ function buildFallbackPlantConfig(seedId, plantId = 0) {
         seasons: 1,
         grow_phases: '',
         exp: 0,
-        size: 1,
+        size: getSeedPlantSize(numericSeedId),
         fruit: {
             id: 0,
             count: 0,
@@ -682,4 +704,5 @@ module.exports = {
     getSeedPrice,
     getFruitPrice,
     getSeedImageBySeedId,
+    getSeedPlantSize,
 };

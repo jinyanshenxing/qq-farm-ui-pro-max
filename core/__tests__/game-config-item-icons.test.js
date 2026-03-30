@@ -52,6 +52,7 @@ test('pet items resolve to extracted PNG icons from live mini-game cache', () =>
         [90001, '90001.png'],
         [90002, '90002.png'],
         [90003, '90003.png'],
+        [90006, 'dogFood3.png'],
         [90011, '90011.png'],
     ]);
 

@@ -1,6 +1,6 @@
 
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('../../config/config');
-const { getPlantName, getPlantById, getSeedImageBySeedId } = require('../../config/gameConfig');
+const { getPlantName, getPlantById, getPlantGrowTime, getSeedImageBySeedId } = require('../../config/gameConfig');
 const { isAutomationOn, getFriendBlacklist, getStakeoutStealConfig, getFriendQuietHours } = require('../../models/store');
 const { getUserState, networkEvents } = require('../../utils/network');
 const { toNum, toTimeSec, getServerTimeSec, log, logWarn, sleep } = require('../../utils/utils');
@@ -22,6 +22,66 @@ const _periodicStatusLogCache = new Map();
 const HIGH_RISK_QQ_GUARD_TTL_MS = 5 * 60 * 1000;
 const _highRiskQqGuardLogCache = new Map();
 let consecutiveErrors = 0;
+
+function resolveTotalGrowTimeSec(plant, matureBeginSec = 0, plantCfg = null) {
+    const phases = Array.isArray(plant && plant.phases) ? plant.phases : [];
+    const matureBegin = toNum(matureBeginSec);
+    let phaseDerivedTotal = 0;
+    if (matureBegin > 0 && phases.length > 0) {
+        const beginCandidates = phases
+            .map(phase => toTimeSec(phase && phase.begin_time))
+            .filter(sec => sec > 0 && sec <= matureBegin);
+        if (beginCandidates.length > 0) {
+            phaseDerivedTotal = Math.max(0, matureBegin - Math.min(...beginCandidates));
+        }
+    }
+
+    const configGrowTime = getPlantGrowTime(toNum(plant && plant.id))
+        || getPlantGrowTime(toNum(plantCfg && plantCfg.id))
+        || 0;
+
+    return Math.max(phaseDerivedTotal, configGrowTime, 0);
+}
+
+function resolvePhaseProgressMeta(phases, currentPhase, nowSec) {
+    const list = Array.isArray(phases) ? phases : [];
+    if (!currentPhase || list.length === 0) {
+        return {
+            currentPhaseStartSec: 0,
+            currentPhaseEndSec: 0,
+            currentPhaseDurationSec: 0,
+            currentPhaseRemainingSec: 0,
+            currentPhaseElapsedSec: 0,
+            currentPhaseProgress: 0,
+        };
+    }
+
+    const currentIndex = list.findIndex(phase => phase === currentPhase || toNum(phase && phase.phase) === toNum(currentPhase && currentPhase.phase));
+    const currentPhaseStartSec = toTimeSec(currentPhase.begin_time);
+    const nextPhase = currentIndex >= 0 ? list[currentIndex + 1] : null;
+    const currentPhaseEndSec = nextPhase ? toTimeSec(nextPhase.begin_time) : 0;
+    const currentPhaseDurationSec = currentPhaseStartSec > 0 && currentPhaseEndSec > currentPhaseStartSec
+        ? (currentPhaseEndSec - currentPhaseStartSec)
+        : 0;
+    const currentPhaseElapsedSec = currentPhaseDurationSec > 0
+        ? Math.max(0, Math.min(currentPhaseDurationSec, nowSec - currentPhaseStartSec))
+        : 0;
+    const currentPhaseRemainingSec = currentPhaseDurationSec > 0
+        ? Math.max(0, currentPhaseEndSec - nowSec)
+        : 0;
+    const currentPhaseProgress = currentPhaseDurationSec > 0
+        ? Math.max(0, Math.min(100, Math.round((currentPhaseElapsedSec / currentPhaseDurationSec) * 100)))
+        : 0;
+
+    return {
+        currentPhaseStartSec,
+        currentPhaseEndSec,
+        currentPhaseDurationSec,
+        currentPhaseRemainingSec,
+        currentPhaseElapsedSec,
+        currentPhaseProgress,
+    };
+}
 
 function _logFriendsListDebug(cacheKey, message, level = 'info') {
     const now = Date.now();
@@ -740,6 +800,8 @@ async function getFriendLandsDetail(friendGid) {
                 : null;
             const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
             const matureInSec = matureBegin > nowSec ? (matureBegin - nowSec) : 0;
+            const totalGrowTime = resolveTotalGrowTimeSec(plant, matureBegin, plantCfg);
+            const phaseProgressMeta = resolvePhaseProgressMeta(plant.phases, currentPhase, nowSec);
             let landStatus = 'growing';
             if (phaseVal === PlantPhase.MATURE) landStatus = plant.stealable ? 'stealable' : 'harvested';
             else if (phaseVal === PlantPhase.DEAD) landStatus = 'dead';
@@ -754,6 +816,13 @@ async function getFriendLandsDetail(friendGid) {
                 phaseName,
                 level,
                 matureInSec,
+                totalGrowTime,
+                currentPhaseStartSec: phaseProgressMeta.currentPhaseStartSec,
+                currentPhaseEndSec: phaseProgressMeta.currentPhaseEndSec,
+                currentPhaseDurationSec: phaseProgressMeta.currentPhaseDurationSec,
+                currentPhaseRemainingSec: phaseProgressMeta.currentPhaseRemainingSec,
+                currentPhaseElapsedSec: phaseProgressMeta.currentPhaseElapsedSec,
+                currentPhaseProgress: phaseProgressMeta.currentPhaseProgress,
                 needWater: toNum(plant.dry_num) > 0,
                 needWeed: (plant.weed_owners && plant.weed_owners.length > 0),
                 needBug: (plant.insect_owners && plant.insect_owners.length > 0),

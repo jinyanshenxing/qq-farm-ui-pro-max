@@ -7,6 +7,7 @@ const {
     getPlantBySeedId,
     getPlantName,
     getPlantNameBySeedId,
+    getSeedPlantSize,
     getSeedImageBySeedId,
 } = require('../src/config/gameConfig');
 
@@ -25,11 +26,19 @@ test('plant names fall back to ItemInfo seed metadata when Plant.json entry is m
     assert.equal(plant && plant.size, 1);
 });
 
+test('missing plant configs can still expose corrected multi-cell size from fallback overrides', () => {
+    const plant = getPlantBySeedId(20046);
+    assert.equal(plant && plant.seed_id, 20046);
+    assert.equal(plant && plant.size, 2);
+    assert.equal(getSeedPlantSize(20046), 2);
+});
+
 test('all seeds includes ItemInfo-derived seeds outside Plant.json coverage', () => {
     const seed = getAllSeeds().find(item => Number(item.seedId) === 20249);
     assert.equal(!!seed, true);
     assert.equal(seed && seed.name, '荷包牡丹');
     assert.equal(seed && seed.requiredLevel, 61);
+    assert.equal(seed && seed.plantSize, 1);
     assert.equal(String(seed && seed.image).endsWith('/seed_images_named/Crop_249_Seed.png'), true);
 });
 

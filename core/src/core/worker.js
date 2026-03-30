@@ -974,6 +974,9 @@ async function handleApiCall(msg) {
             case 'doFarmOp':
                 result = await farmService.runFarmOperation(args[0]); // opType
                 break;
+            case 'doFarmLandOp':
+                result = await farmService.runSingleLandOperation(args[0], args[1]);
+                break;
             case 'getAnalytics': {
                 const { getPlantRankings } = require('../services/analytics');
                 result = getPlantRankings(args[0]); // sortBy

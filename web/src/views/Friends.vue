@@ -1887,11 +1887,12 @@ function getInspectionReasonBadges(friend: any) {
             <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="glass-text-muted py-4 text-center text-sm">
               无土地数据
             </div>
-            <div v-else class="grid grid-cols-3 gap-2 md:grid-cols-3 sm:grid-cols-4 xl:grid-cols-4">
+            <div v-else class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               <LandCard
                 v-for="land in friendLands[friend.gid]"
                 :key="land.id"
                 :land="land"
+                :interactive="false"
               />
             </div>
           </div>

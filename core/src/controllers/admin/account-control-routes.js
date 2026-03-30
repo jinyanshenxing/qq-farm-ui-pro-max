@@ -313,6 +313,18 @@ function registerAccountControlRoutes({
         }
     });
 
+    app.post('/api/farm/land/operate', accountOwnershipRequired, async (req, res) => {
+        const id = await getAccId(req);
+        if (!id) return res.status(400).json({ ok: false });
+        try {
+            const { opType, landId } = req.body || {};
+            const data = await getProvider().doFarmLandOp(id, opType, landId);
+            res.json({ ok: true, data });
+        } catch (e) {
+            handleApiError(res, e);
+        }
+    });
+
     app.get('/api/analytics', async (req, res) => {
         try {
             const ANALYTICS_SORT_WHITELIST = new Set(['exp', 'fert', 'gold', 'profit', 'fert_profit', 'level']);
